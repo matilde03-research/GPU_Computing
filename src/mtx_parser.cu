@@ -4,214 +4,319 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include <cstdlib>
+#include <map>
+#include <curand_kernel.h>
 
-COOMatrix parse_mtx_file(const char* filename) {
+// Parse Matrix Market file
+COOMatrix readMatrixMarket(const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "Error: Cannot open file " << filename << std::endl;
-        exit(1);
+        fprintf(stderr, "Error: Cannot open file %s\n", filename.c_str());
+        exit(EXIT_FAILURE);
     }
 
+    COOMatrix coo = {0, 0, 0, {}, {}, {}};
     std::string line;
-    int rows = 0, cols = 0, nnz = 0;
-    bool is_symmetric = false;
-
+    
+    // Read header
     while (std::getline(file, line)) {
-        if (line[0] == '%') {
-            if (line.find("symmetric") != std::string::npos) {
-                is_symmetric = true;
-            }
-            continue;
-        }
-        std::istringstream iss(line);
-        iss >> rows >> cols >> nnz;
-        break;
+        if (line[0] != '%') break;  // Skip comment lines
     }
 
-    if (rows == 0 || cols == 0 || nnz == 0) {
-        std::cerr << "Error: Invalid matrix dimensions" << std::endl;
-        exit(1);
+    // Parse dimensions and nnz
+    std::istringstream iss(line);
+    if (!(iss >> coo.m >> coo.n >> coo.nnz)) {
+        fprintf(stderr, "Error: Invalid Matrix Market header\n");
+        exit(EXIT_FAILURE);
     }
 
-    std::vector<int> row_indices;
-    std::vector<int> col_indices;
-    std::vector<float> values;
+    coo.row.reserve(coo.nnz);
+    coo.col.reserve(coo.nnz);
+    coo.val.reserve(coo.nnz);
 
-    row_indices.reserve(nnz * (is_symmetric ? 2 : 1));
-    col_indices.reserve(nnz * (is_symmetric ? 2 : 1));
-    values.reserve(nnz * (is_symmetric ? 2 : 1));
-
-    int actual_nnz = 0;
-
+    // Read matrix entries (1-indexed in file, convert to 0-indexed)
+    int row_idx, col_idx;
+    FloatType value;
     while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '%') continue;
-
-        std::istringstream iss(line);
-        int i, j;
-        float val = 1.0f;
-
-        if (!(iss >> i >> j)) continue;
-        if (!(iss >> val)) {
-            val = 1.0f;
-        }
-
-        i--; j--;
-
-        if (i < 0 || i >= rows || j < 0 || j >= cols) {
-            std::cerr << "Warning: Index out of bounds (" << i << ", " << j << ")" << std::endl;
-            continue;
-        }
-
-        row_indices.push_back(i);
-        col_indices.push_back(j);
-        values.push_back(val);
-        actual_nnz++;
-
-        if (is_symmetric && i != j) {
-            row_indices.push_back(j);
-            col_indices.push_back(i);
-            values.push_back(val);
-            actual_nnz++;
+        std::istringstream entry(line);
+        if (entry >> row_idx >> col_idx >> value) {
+            coo.row.push_back(row_idx - 1);  // Convert to 0-indexed
+            coo.col.push_back(col_idx - 1);
+            coo.val.push_back(value);
         }
     }
 
     file.close();
+    
+    if ((int)coo.row.size() != coo.nnz) {
+        fprintf(stderr, "Warning: Read %lu entries but header specified %d\n", 
+                coo.row.size(), coo.nnz);
+        coo.nnz = (int)coo.row.size();
+    }
 
-    std::cout << "Matrix Market file parsed:" << std::endl;
-    std::cout << "  Dimensions: " << rows << " x " << cols << std::endl;
-    std::cout << "  Non-zeros: " << actual_nnz << std::endl;
-    std::cout << "  Symmetric: " << (is_symmetric ? "yes" : "no") << std::endl;
-
-    return {rows, cols, actual_nnz, row_indices, col_indices, values};
+    return coo;
 }
 
-CSRMatrix coo_to_csr(const COOMatrix& coo) {
-    std::vector<int> row_ptr(coo.rows + 1, 0);
-    std::vector<int> col_idx(coo.nnz);
-    std::vector<float> values(coo.nnz);
+// Convert COO to CSR format
+CSRMatrix cooToCSR(const COOMatrix& coo) {
+    CSRMatrix csr;
+    csr.m = coo.m;
+    csr.n = coo.n;
+    csr.nnz = coo.nnz;
 
-    std::vector<int> indices(coo.nnz);
+    // Create host CSR data
+    csr.h_row_ptr = new int[coo.m + 1]();
+    csr.h_col_idx = new int[coo.nnz];
+    csr.h_values = new FloatType[coo.nnz];
+
+    // Count non-zeros per row
     for (int i = 0; i < coo.nnz; i++) {
-        indices[i] = i;
+        csr.h_row_ptr[coo.row[i] + 1]++;
     }
 
-    std::sort(indices.begin(), indices.end(), [&coo](int a, int b) {
-        if (coo.row_indices[a] != coo.row_indices[b]) {
-            return coo.row_indices[a] < coo.row_indices[b];
-        }
-        return coo.col_indices[a] < coo.col_indices[b];
-    });
+    // Compute row pointers
+    for (int i = 0; i < coo.m; i++) {
+        csr.h_row_ptr[i + 1] += csr.h_row_ptr[i];
+    }
 
+    // Sort entries by row and fill CSR
+    std::vector<int> row_count(coo.m, 0);
     for (int i = 0; i < coo.nnz; i++) {
-        int idx = indices[i];
-        col_idx[i] = coo.col_indices[idx];
-        values[i] = coo.values[idx];
+        int row = coo.row[i];
+        int pos = csr.h_row_ptr[row] + row_count[row]++;
+        csr.h_col_idx[pos] = coo.col[i];
+        csr.h_values[pos] = coo.val[i];
     }
 
-    for (int i = 0; i < coo.nnz; i++) {
-        int idx = indices[i];
-        int row = coo.row_indices[idx];
-        row_ptr[row + 1]++;
-    }
+    // Copy to device
+    CUDA_CHECK(cudaMalloc(&csr.d_row_ptr, (coo.m + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&csr.d_col_idx, coo.nnz * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&csr.d_values, coo.nnz * sizeof(FloatType)));
 
-    for (int i = 1; i <= coo.rows; i++) {
-        row_ptr[i] += row_ptr[i - 1];
-    }
+    CUDA_CHECK(cudaMemcpy(csr.d_row_ptr, csr.h_row_ptr, (coo.m + 1) * sizeof(int), 
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(csr.d_col_idx, csr.h_col_idx, coo.nnz * sizeof(int), 
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(csr.d_values, csr.h_values, coo.nnz * sizeof(FloatType), 
+                          cudaMemcpyHostToDevice));
 
-    return {coo.rows, coo.cols, coo.nnz, row_ptr, col_idx, values};
+    return csr;
 }
 
-ELLMatrix coo_to_ell(const COOMatrix& coo) {
-    std::vector<int> nnz_per_row(coo.rows, 0);
+// Convert COO to ELL format
+ELLMatrix cooToELL(const COOMatrix& coo) {
+    ELLMatrix ell;
+    ell.m = coo.m;
+    ell.n = coo.n;
+    ell.nnz = coo.nnz;
+
+    // Find maximum row length
+    std::vector<int> row_lengths(coo.m, 0);
     for (int i = 0; i < coo.nnz; i++) {
-        nnz_per_row[coo.row_indices[i]]++;
+        row_lengths[coo.row[i]]++;
+    }
+    ell.max_row_len = *std::max_element(row_lengths.begin(), row_lengths.end());
+
+    // Create host ELL data (padded to max_row_len)
+    ell.h_col_idx = new int[coo.m * ell.max_row_len];
+    ell.h_values = new FloatType[coo.m * ell.max_row_len];
+    
+    // Initialize with invalid column index (-1) and zero values
+    for (int i = 0; i < coo.m * ell.max_row_len; i++) {
+        ell.h_col_idx[i] = -1;
+        ell.h_values[i] = 0.0f;
     }
 
-    int max_nnz_per_row = *std::max_element(nnz_per_row.begin(), nnz_per_row.end());
-
-    std::vector<int> col_idx(coo.rows * max_nnz_per_row, -1);
-    std::vector<float> values(coo.rows * max_nnz_per_row, 0.0f);
-
-    std::vector<int> row_positions(coo.rows, 0);
-
-    std::vector<int> indices(coo.nnz);
+    // Fill ELL format (column-major order for better memory access)
+    std::vector<int> col_count(coo.m, 0);
     for (int i = 0; i < coo.nnz; i++) {
-        indices[i] = i;
+        int row = coo.row[i];
+        int col_pos = col_count[row]++;
+        ell.h_col_idx[col_pos * coo.m + row] = coo.col[i];
+        ell.h_values[col_pos * coo.m + row] = coo.val[i];
     }
 
-    std::sort(indices.begin(), indices.end(), [&coo](int a, int b) {
-        if (coo.row_indices[a] != coo.row_indices[b]) {
-            return coo.row_indices[a] < coo.row_indices[b];
-        }
-        return coo.col_indices[a] < coo.col_indices[b];
-    });
+    // Copy to device
+    CUDA_CHECK(cudaMalloc(&ell.d_col_idx, coo.m * ell.max_row_len * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&ell.d_values, coo.m * ell.max_row_len * sizeof(FloatType)));
 
-    for (int i = 0; i < coo.nnz; i++) {
-        int idx = indices[i];
-        int row = coo.row_indices[idx];
-        int col = coo.col_indices[idx];
-        float val = coo.values[idx];
+    CUDA_CHECK(cudaMemcpy(ell.d_col_idx, ell.h_col_idx, coo.m * ell.max_row_len * sizeof(int), 
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(ell.d_values, ell.h_values, coo.m * ell.max_row_len * sizeof(FloatType), 
+                          cudaMemcpyHostToDevice));
 
-        int pos = row_positions[row];
-        col_idx[row * max_nnz_per_row + pos] = col;
-        values[row * max_nnz_per_row + pos] = val;
-        row_positions[row]++;
-    }
-
-    return {coo.rows, coo.cols, coo.nnz, max_nnz_per_row, col_idx, values};
+    return ell;
 }
 
-JDSMatrix coo_to_jds(const COOMatrix& coo) {
-    std::vector<int> nnz_per_row(coo.rows, 0);
+// Convert COO to JDS format
+JDSMatrix cooToJDS(const COOMatrix& coo) {
+    JDSMatrix jds;
+    jds.m = coo.m;
+    jds.n = coo.n;
+    jds.nnz = coo.nnz;
+
+    // Count non-zeros per row
+    std::vector<int> row_lengths(coo.m, 0);
     for (int i = 0; i < coo.nnz; i++) {
-        nnz_per_row[coo.row_indices[i]]++;
+        row_lengths[coo.row[i]]++;
     }
 
-    std::vector<int> perm(coo.rows);
-    for (int i = 0; i < coo.rows; i++) {
-        perm[i] = i;
+    // Create permutation based on row lengths (descending)
+    std::vector<std::pair<int, int>> row_pairs;
+    for (int i = 0; i < coo.m; i++) {
+        row_pairs.push_back({row_lengths[i], i});
+    }
+    std::sort(row_pairs.begin(), row_pairs.end(), std::greater<std::pair<int, int>>());
+
+    // Create permutation and inverse permutation arrays
+    jds.h_perm = new int[coo.m];
+    jds.h_iperm = new int[coo.m];
+    for (int i = 0; i < coo.m; i++) {
+        jds.h_perm[i] = row_pairs[i].second;
+        jds.h_iperm[row_pairs[i].second] = i;
     }
 
-    std::sort(perm.begin(), perm.end(), [&nnz_per_row](int a, int b) {
-        return nnz_per_row[a] > nnz_per_row[b];
-    });
+    // Build diagonal structure
+    std::vector<std::vector<int>> diag_col_idx;
+    std::vector<std::vector<FloatType>> diag_values;
+    std::vector<int> cur_pos(coo.m, 0);
 
-    std::vector<int> col_idx;
-    std::vector<float> values;
-    std::vector<int> row_lengths(coo.rows);
-
-    std::vector<std::vector<std::pair<int, float>>> row_data(coo.rows);
-    for (int i = 0; i < coo.nnz; i++) {
-        int row = coo.row_indices[i];
-        int col = coo.col_indices[i];
-        float val = coo.values[i];
-        row_data[row].push_back({col, val});
-    }
-
-    for (int i = 0; i < coo.rows; i++) {
-        std::sort(row_data[i].begin(), row_data[i].end());
-    }
-
-    for (int i = 0; i < coo.rows; i++) {
-        int row = perm[i];
-        row_lengths[i] = row_data[row].size();
+    for (int diag = 0; diag < row_pairs[0].first; diag++) {
+        std::vector<int> col_idx;
+        std::vector<FloatType> values;
         
-        for (auto& [col, val] : row_data[row]) {
-            col_idx.push_back(col);
-            values.push_back(val);
+        for (int i = 0; i < coo.m; i++) {
+            int orig_row = jds.h_perm[i];
+            if (cur_pos[orig_row] < row_lengths[orig_row]) {
+                // Find the diag-th non-zero for this row
+                int count = 0;
+                for (int j = 0; j < coo.nnz; j++) {
+                    if (coo.row[j] == orig_row) {
+                        if (count == cur_pos[orig_row]) {
+                            col_idx.push_back(coo.col[j]);
+                            values.push_back(coo.val[j]);
+                            cur_pos[orig_row]++;
+                            break;
+                        }
+                        count++;
+                    }
+                }
+            }
+        }
+        
+        if (!col_idx.empty()) {
+            diag_col_idx.push_back(col_idx);
+            diag_values.push_back(values);
         }
     }
 
-    return {coo.rows, coo.cols, coo.nnz, perm, row_lengths, col_idx, values};
+    // Store diagonals in JDS format
+    int total_diags = (int)diag_col_idx.size();
+    jds.h_col_start = new int[total_diags];
+    jds.h_diag_len = new int[total_diags];
+    
+    int col_pos = 0;
+    int total_entries = 0;
+    for (int d = 0; d < total_diags; d++) {
+        jds.h_col_start[d] = col_pos;
+        jds.h_diag_len[d] = (int)diag_col_idx[d].size();
+        col_pos += (int)diag_col_idx[d].size();
+        total_entries += (int)diag_col_idx[d].size();
+    }
+
+    // Flatten diagonal data
+    jds.h_col_idx = new int[total_entries];
+    jds.h_values = new FloatType[total_entries];
+    
+    col_pos = 0;
+    for (int d = 0; d < total_diags; d++) {
+        for (int i = 0; i < (int)diag_col_idx[d].size(); i++) {
+            jds.h_col_idx[col_pos] = diag_col_idx[d][i];
+            jds.h_values[col_pos] = diag_values[d][i];
+            col_pos++;
+        }
+    }
+
+    // Copy to device
+    CUDA_CHECK(cudaMalloc(&jds.d_perm, coo.m * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&jds.d_iperm, coo.m * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&jds.d_col_start, total_diags * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&jds.d_diag_len, total_diags * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&jds.d_col_idx, total_entries * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&jds.d_values, total_entries * sizeof(FloatType)));
+
+    CUDA_CHECK(cudaMemcpy(jds.d_perm, jds.h_perm, coo.m * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(jds.d_iperm, jds.h_iperm, coo.m * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(jds.d_col_start, jds.h_col_start, total_diags * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(jds.d_diag_len, jds.h_diag_len, total_diags * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(jds.d_col_idx, jds.h_col_idx, total_entries * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(jds.d_values, jds.h_values, total_entries * sizeof(FloatType), cudaMemcpyHostToDevice));
+
+    return jds;
 }
 
-std::vector<float> generate_random_vector(int size, int seed) {
-    std::vector<float> vec(size);
-    srand(seed);
-    
-    for (int i = 0; i < size; i++) {
-        vec[i] = (float)rand() / RAND_MAX;
+// Generate random vector with fixed seed
+__global__ void fillRandomVector(FloatType *d_vector, int size, unsigned int seed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        curandState state;
+        curand_init(seed, idx, 0, &state);
+        d_vector[idx] = curand_uniform(&state);
     }
+}
+
+void generateRandomVector(FloatType *d_vector, int size, unsigned int seed) {
+    int blockSize = 256;
+    int gridSize = (size + blockSize - 1) / blockSize;
+    fillRandomVector<<<gridSize, blockSize>>>(d_vector, size, seed);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+}
+
+// Print matrix statistics
+void printMatrixStats(const COOMatrix& coo) {
+    double sparsity = 100.0 * (1.0 - (double)coo.nnz / (coo.m * coo.n));
+    size_t memory_coo = coo.nnz * (2 * sizeof(int) + sizeof(FloatType));
     
-    return vec;
+    printf("Matrix Statistics:\n");
+    printf("  Dimensions: %d x %d\n", coo.m, coo.n);
+    printf("  Non-zeros: %d\n", coo.nnz);
+    printf("  Sparsity: %.2f%%\n", sparsity);
+    printf("  Avg NNZ per row: %.2f\n", (double)coo.nnz / coo.m);
+    printf("  Memory (COO format): %.2f KB\n", memory_coo / 1024.0);
+}
+
+// Free CSR matrix
+void freeCSRMatrix(CSRMatrix& csr) {
+    if (csr.d_row_ptr) CUDA_CHECK(cudaFree(csr.d_row_ptr));
+    if (csr.d_col_idx) CUDA_CHECK(cudaFree(csr.d_col_idx));
+    if (csr.d_values) CUDA_CHECK(cudaFree(csr.d_values));
+    if (csr.h_row_ptr) delete[] csr.h_row_ptr;
+    if (csr.h_col_idx) delete[] csr.h_col_idx;
+    if (csr.h_values) delete[] csr.h_values;
+}
+
+// Free ELL matrix
+void freeELLMatrix(ELLMatrix& ell) {
+    if (ell.d_col_idx) CUDA_CHECK(cudaFree(ell.d_col_idx));
+    if (ell.d_values) CUDA_CHECK(cudaFree(ell.d_values));
+    if (ell.h_col_idx) delete[] ell.h_col_idx;
+    if (ell.h_values) delete[] ell.h_values;
+}
+
+// Free JDS matrix
+void freeJDSMatrix(JDSMatrix& jds) {
+    if (jds.d_perm) CUDA_CHECK(cudaFree(jds.d_perm));
+    if (jds.d_iperm) CUDA_CHECK(cudaFree(jds.d_iperm));
+    if (jds.d_col_start) CUDA_CHECK(cudaFree(jds.d_col_start));
+    if (jds.d_diag_len) CUDA_CHECK(cudaFree(jds.d_diag_len));
+    if (jds.d_col_idx) CUDA_CHECK(cudaFree(jds.d_col_idx));
+    if (jds.d_values) CUDA_CHECK(cudaFree(jds.d_values));
+    if (jds.h_perm) delete[] jds.h_perm;
+    if (jds.h_iperm) delete[] jds.h_iperm;
+    if (jds.h_col_start) delete[] jds.h_col_start;
+    if (jds.h_diag_len) delete[] jds.h_diag_len;
+    if (jds.h_col_idx) delete[] jds.h_col_idx;
+    if (jds.h_values) delete[] jds.h_values;
 }
