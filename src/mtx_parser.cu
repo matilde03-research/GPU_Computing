@@ -1,0 +1,217 @@
+#include "../include/mtx_parser.h"
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <cstring>
+#include <iostream>
+
+COOMatrix parse_mtx_file(const char* filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Cannot open file " << filename << std::endl;
+        exit(1);
+    }
+
+    std::string line;
+    int rows = 0, cols = 0, nnz = 0;
+    bool is_symmetric = false;
+
+    while (std::getline(file, line)) {
+        if (line[0] == '%') {
+            if (line.find("symmetric") != std::string::npos) {
+                is_symmetric = true;
+            }
+            continue;
+        }
+        std::istringstream iss(line);
+        iss >> rows >> cols >> nnz;
+        break;
+    }
+
+    if (rows == 0 || cols == 0 || nnz == 0) {
+        std::cerr << "Error: Invalid matrix dimensions" << std::endl;
+        exit(1);
+    }
+
+    std::vector<int> row_indices;
+    std::vector<int> col_indices;
+    std::vector<float> values;
+
+    row_indices.reserve(nnz * (is_symmetric ? 2 : 1));
+    col_indices.reserve(nnz * (is_symmetric ? 2 : 1));
+    values.reserve(nnz * (is_symmetric ? 2 : 1));
+
+    int actual_nnz = 0;
+
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '%') continue;
+
+        std::istringstream iss(line);
+        int i, j;
+        float val = 1.0f;
+
+        if (!(iss >> i >> j)) continue;
+        if (!(iss >> val)) {
+            val = 1.0f;
+        }
+
+        i--; j--;
+
+        if (i < 0 || i >= rows || j < 0 || j >= cols) {
+            std::cerr << "Warning: Index out of bounds (" << i << ", " << j << ")" << std::endl;
+            continue;
+        }
+
+        row_indices.push_back(i);
+        col_indices.push_back(j);
+        values.push_back(val);
+        actual_nnz++;
+
+        if (is_symmetric && i != j) {
+            row_indices.push_back(j);
+            col_indices.push_back(i);
+            values.push_back(val);
+            actual_nnz++;
+        }
+    }
+
+    file.close();
+
+    std::cout << "Matrix Market file parsed:" << std::endl;
+    std::cout << "  Dimensions: " << rows << " x " << cols << std::endl;
+    std::cout << "  Non-zeros: " << actual_nnz << std::endl;
+    std::cout << "  Symmetric: " << (is_symmetric ? "yes" : "no") << std::endl;
+
+    return {rows, cols, actual_nnz, row_indices, col_indices, values};
+}
+
+CSRMatrix coo_to_csr(const COOMatrix& coo) {
+    std::vector<int> row_ptr(coo.rows + 1, 0);
+    std::vector<int> col_idx(coo.nnz);
+    std::vector<float> values(coo.nnz);
+
+    std::vector<int> indices(coo.nnz);
+    for (int i = 0; i < coo.nnz; i++) {
+        indices[i] = i;
+    }
+
+    std::sort(indices.begin(), indices.end(), [&coo](int a, int b) {
+        if (coo.row_indices[a] != coo.row_indices[b]) {
+            return coo.row_indices[a] < coo.row_indices[b];
+        }
+        return coo.col_indices[a] < coo.col_indices[b];
+    });
+
+    for (int i = 0; i < coo.nnz; i++) {
+        int idx = indices[i];
+        col_idx[i] = coo.col_indices[idx];
+        values[i] = coo.values[idx];
+    }
+
+    for (int i = 0; i < coo.nnz; i++) {
+        int idx = indices[i];
+        int row = coo.row_indices[idx];
+        row_ptr[row + 1]++;
+    }
+
+    for (int i = 1; i <= coo.rows; i++) {
+        row_ptr[i] += row_ptr[i - 1];
+    }
+
+    return {coo.rows, coo.cols, coo.nnz, row_ptr, col_idx, values};
+}
+
+ELLMatrix coo_to_ell(const COOMatrix& coo) {
+    std::vector<int> nnz_per_row(coo.rows, 0);
+    for (int i = 0; i < coo.nnz; i++) {
+        nnz_per_row[coo.row_indices[i]]++;
+    }
+
+    int max_nnz_per_row = *std::max_element(nnz_per_row.begin(), nnz_per_row.end());
+
+    std::vector<int> col_idx(coo.rows * max_nnz_per_row, -1);
+    std::vector<float> values(coo.rows * max_nnz_per_row, 0.0f);
+
+    std::vector<int> row_positions(coo.rows, 0);
+
+    std::vector<int> indices(coo.nnz);
+    for (int i = 0; i < coo.nnz; i++) {
+        indices[i] = i;
+    }
+
+    std::sort(indices.begin(), indices.end(), [&coo](int a, int b) {
+        if (coo.row_indices[a] != coo.row_indices[b]) {
+            return coo.row_indices[a] < coo.row_indices[b];
+        }
+        return coo.col_indices[a] < coo.col_indices[b];
+    });
+
+    for (int i = 0; i < coo.nnz; i++) {
+        int idx = indices[i];
+        int row = coo.row_indices[idx];
+        int col = coo.col_indices[idx];
+        float val = coo.values[idx];
+
+        int pos = row_positions[row];
+        col_idx[row * max_nnz_per_row + pos] = col;
+        values[row * max_nnz_per_row + pos] = val;
+        row_positions[row]++;
+    }
+
+    return {coo.rows, coo.cols, coo.nnz, max_nnz_per_row, col_idx, values};
+}
+
+JDSMatrix coo_to_jds(const COOMatrix& coo) {
+    std::vector<int> nnz_per_row(coo.rows, 0);
+    for (int i = 0; i < coo.nnz; i++) {
+        nnz_per_row[coo.row_indices[i]]++;
+    }
+
+    std::vector<int> perm(coo.rows);
+    for (int i = 0; i < coo.rows; i++) {
+        perm[i] = i;
+    }
+
+    std::sort(perm.begin(), perm.end(), [&nnz_per_row](int a, int b) {
+        return nnz_per_row[a] > nnz_per_row[b];
+    });
+
+    std::vector<int> col_idx;
+    std::vector<float> values;
+    std::vector<int> row_lengths(coo.rows);
+
+    std::vector<std::vector<std::pair<int, float>>> row_data(coo.rows);
+    for (int i = 0; i < coo.nnz; i++) {
+        int row = coo.row_indices[i];
+        int col = coo.col_indices[i];
+        float val = coo.values[i];
+        row_data[row].push_back({col, val});
+    }
+
+    for (int i = 0; i < coo.rows; i++) {
+        std::sort(row_data[i].begin(), row_data[i].end());
+    }
+
+    for (int i = 0; i < coo.rows; i++) {
+        int row = perm[i];
+        row_lengths[i] = row_data[row].size();
+        
+        for (auto& [col, val] : row_data[row]) {
+            col_idx.push_back(col);
+            values.push_back(val);
+        }
+    }
+
+    return {coo.rows, coo.cols, coo.nnz, perm, row_lengths, col_idx, values};
+}
+
+std::vector<float> generate_random_vector(int size, int seed) {
+    std::vector<float> vec(size);
+    srand(seed);
+    
+    for (int i = 0; i < size; i++) {
+        vec[i] = (float)rand() / RAND_MAX;
+    }
+    
+    return vec;
+}
