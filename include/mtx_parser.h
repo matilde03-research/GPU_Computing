@@ -33,6 +33,15 @@ struct CSRMatrix {
     int *d_row_ptr = nullptr;
     int *d_col_idx = nullptr;
     FloatType *d_values = nullptr;
+    
+    // Constructor
+    CSRMatrix() = default;
+    CSRMatrix(int m_, int n_, int nnz_, 
+              std::vector<int> row_ptr_, 
+              std::vector<int> col_idx_, 
+              std::vector<FloatType> values_)
+        : m(m_), n(n_), nnz(nnz_), 
+          row_ptr(row_ptr_), col_idx(col_idx_), values(values_) {}
 };
 
 struct ELLMatrix {
@@ -44,6 +53,14 @@ struct ELLMatrix {
     // GPU pointers
     int *d_col_idx = nullptr;
     FloatType *d_values = nullptr;
+    
+    // Constructor
+    ELLMatrix() = default;
+    ELLMatrix(int m_, int n_, int nnz_, int max_row_len_,
+              std::vector<int> col_idx_, 
+              std::vector<FloatType> values_)
+        : m(m_), n(n_), nnz(nnz_), max_row_len(max_row_len_),
+          col_idx(col_idx_), values(values_) {}
 };
 
 struct JDSMatrix {
@@ -60,6 +77,18 @@ struct JDSMatrix {
     int *d_col_start = nullptr;
     int *d_col_idx = nullptr;
     FloatType *d_values = nullptr;
+    
+    // Constructor
+    JDSMatrix() = default;
+    JDSMatrix(int m_, int n_, int nnz_,
+              std::vector<int> perm_,
+              std::vector<int> diag_len_,
+              std::vector<int> col_start_,
+              std::vector<int> col_idx_, 
+              std::vector<FloatType> values_)
+        : m(m_), n(n_), nnz(nnz_), 
+          perm(perm_), diag_len(diag_len_), col_start(col_start_),
+          col_idx(col_idx_), values(values_) {}
 };
 
 // Function declarations
@@ -87,3 +116,4 @@ void spmvCPU_JDS(int m, int n, const int *perm, const int *diag_len, const int *
                  const int *col_idx, const FloatType *values, const FloatType *x, FloatType *y);
 
 #endif
+

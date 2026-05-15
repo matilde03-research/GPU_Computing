@@ -126,6 +126,7 @@ int main(int argc, char *argv[]) {
     
     // Allocate workspace
     size_t bufferSize = 0;
+    FloatType one = 1.0f, zero = 0.0f;
     cusparseSpMV_bufferSize(sparse.handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                            &one, sparse.matA, sparse.vecX, &zero, sparse.vecY,
                            CUDA_R_32F, CUSPARSE_SPMV_ALG_DEFAULT, &bufferSize);
@@ -137,7 +138,6 @@ int main(int argc, char *argv[]) {
     double setup_time = std::chrono::duration<double, std::milli>(setup_end - setup_start).count();
     printf("cuSPARSE setup time: %.4f ms\n", setup_time);
     
-    FloatType one = 1.0f, zero = 0.0f;
     
     // Warm-up
     printf("\nWarm-up phase...\n");
