@@ -5,7 +5,7 @@
 #include <cstring>
 #include <iostream>
 
-COOMatrix parse_mtx_file(const char* filename) {
+COOMatrix readMatrixMarket(const char* filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Error: Cannot open file " << filename << std::endl;
@@ -35,7 +35,7 @@ COOMatrix parse_mtx_file(const char* filename) {
 
     std::vector<int> row_indices;
     std::vector<int> col_indices;
-    std::vector<float> values;
+    std::vector<FloatType> values;
 
     row_indices.reserve(nnz * (is_symmetric ? 2 : 1));
     col_indices.reserve(nnz * (is_symmetric ? 2 : 1));
@@ -48,7 +48,7 @@ COOMatrix parse_mtx_file(const char* filename) {
 
         std::istringstream iss(line);
         int i, j;
-        float val = 1.0f;
+        FloatType val = 1.0f;
 
         if (!(iss >> i >> j)) continue;
         if (!(iss >> val)) {
@@ -85,10 +85,10 @@ COOMatrix parse_mtx_file(const char* filename) {
     return {rows, cols, actual_nnz, row_indices, col_indices, values};
 }
 
-CSRMatrix coo_to_csr(const COOMatrix& coo) {
-    std::vector<int> row_ptr(coo.rows + 1, 0);
+CSRMatrix cooToCSR(const COOMatrix& coo) {
+    std::vector<int> row_ptr(coo.m + 1, 0);
     std::vector<int> col_idx(coo.nnz);
-    std::vector<float> values(coo.nnz);
+    std::vector<FloatType> values(coo.nnz);
 
     std::vector<int> indices(coo.nnz);
     for (int i = 0; i < coo.nnz; i++) {
@@ -114,25 +114,25 @@ CSRMatrix coo_to_csr(const COOMatrix& coo) {
         row_ptr[row + 1]++;
     }
 
-    for (int i = 1; i <= coo.rows; i++) {
+    for (int i = 1; i <= coo.m; i++) {
         row_ptr[i] += row_ptr[i - 1];
     }
 
-    return {coo.rows, coo.cols, coo.nnz, row_ptr, col_idx, values};
+    return {coo.m, coo.n, coo.nnz, row_ptr, col_idx, values};
 }
 
-ELLMatrix coo_to_ell(const COOMatrix& coo) {
-    std::vector<int> nnz_per_row(coo.rows, 0);
+ELLMatrix cooToELL(const COOMatrix& coo) {
+    std::vector<int> nnz_per_row(coo.m, 0);
     for (int i = 0; i < coo.nnz; i++) {
         nnz_per_row[coo.row_indices[i]]++;
     }
 
     int max_nnz_per_row = *std::max_element(nnz_per_row.begin(), nnz_per_row.end());
 
-    std::vector<int> col_idx(coo.rows * max_nnz_per_row, -1);
-    std::vector<float> values(coo.rows * max_nnz_per_row, 0.0f);
+    std::vector<int> col_idx(coo.m * max_nnz_per_row, -1);
+    std::vector<FloatType> values(coo.m * max_nnz_per_row, 0.0f);
 
-    std::vector<int> row_positions(coo.rows, 0);
+    std::vector<int> row_positions(coo.m, 0);
 
     std::vector<int> indices(coo.nnz);
     for (int i = 0; i < coo.nnz; i++) {
@@ -150,7 +150,7 @@ ELLMatrix coo_to_ell(const COOMatrix& coo) {
         int idx = indices[i];
         int row = coo.row_indices[idx];
         int col = coo.col_indices[idx];
-        float val = coo.values[idx];
+        FloatType val = coo.values[idx];
 
         int pos = row_positions[row];
         col_idx[row * max_nnz_per_row + pos] = col;
@@ -158,17 +158,17 @@ ELLMatrix coo_to_ell(const COOMatrix& coo) {
         row_positions[row]++;
     }
 
-    return {coo.rows, coo.cols, coo.nnz, max_nnz_per_row, col_idx, values};
+    return {coo.m, coo.n, coo.nnz, max_nnz_per_row, col_idx, values};
 }
 
-JDSMatrix coo_to_jds(const COOMatrix& coo) {
-    std::vector<int> nnz_per_row(coo.rows, 0);
+JDSMatrix cooToJDS(const COOMatrix& coo) {
+    std::vector<int> nnz_per_row(coo.m, 0);
     for (int i = 0; i < coo.nnz; i++) {
         nnz_per_row[coo.row_indices[i]]++;
     }
 
-    std::vector<int> perm(coo.rows);
-    for (int i = 0; i < coo.rows; i++) {
+    std::vector<int> perm(coo.m);
+    for (int i = 0; i < coo.m; i++) {
         perm[i] = i;
     }
 
@@ -177,40 +177,45 @@ JDSMatrix coo_to_jds(const COOMatrix& coo) {
     });
 
     std::vector<int> col_idx;
-    std::vector<float> values;
-    std::vector<int> row_lengths(coo.rows);
+    std::vector<FloatType> values;
+    std::vector<int> diag_len(coo.m);
 
-    std::vector<std::vector<std::pair<int, float>>> row_data(coo.rows);
+    std::vector<std::vector<std::pair<int, FloatType>>> row_data(coo.m);
     for (int i = 0; i < coo.nnz; i++) {
         int row = coo.row_indices[i];
         int col = coo.col_indices[i];
-        float val = coo.values[i];
+        FloatType val = coo.values[i];
         row_data[row].push_back({col, val});
     }
 
-    for (int i = 0; i < coo.rows; i++) {
+    for (int i = 0; i < coo.m; i++) {
         std::sort(row_data[i].begin(), row_data[i].end());
     }
 
-    for (int i = 0; i < coo.rows; i++) {
+    std::vector<int> col_start;
+    col_start.push_back(0);
+
+    for (int i = 0; i < coo.m; i++) {
         int row = perm[i];
-        row_lengths[i] = row_data[row].size();
+        diag_len[i] = row_data[row].size();
         
         for (auto& [col, val] : row_data[row]) {
             col_idx.push_back(col);
             values.push_back(val);
         }
+        
+        col_start.push_back(col_idx.size());
     }
 
-    return {coo.rows, coo.cols, coo.nnz, perm, row_lengths, col_idx, values};
+    return {coo.m, coo.n, coo.nnz, perm, diag_len, col_start, col_idx, values};
 }
 
-std::vector<float> generate_random_vector(int size, int seed) {
-    std::vector<float> vec(size);
+std::vector<FloatType> generateRandomVector(int size, int seed) {
+    std::vector<FloatType> vec(size);
     srand(seed);
     
     for (int i = 0; i < size; i++) {
-        vec[i] = (float)rand() / RAND_MAX;
+        vec[i] = (FloatType)rand() / RAND_MAX;
     }
     
     return vec;
