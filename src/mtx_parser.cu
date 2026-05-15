@@ -199,9 +199,9 @@ JDSMatrix cooToJDS(const COOMatrix& coo) {
         int row = perm[i];
         diag_len[i] = row_data[row].size();
         
-        for (auto& [col, val] : row_data[row]) {
-            col_idx.push_back(col);
-            values.push_back(val);
+        for (int j = 0; j < row_data[row].size(); j++) {
+            col_idx.push_back(row_data[row][j].first);
+            values.push_back(row_data[row][j].second);
         }
         
         col_start.push_back(col_idx.size());
@@ -219,4 +219,110 @@ std::vector<FloatType> generateRandomVector(int size, int seed) {
     }
     
     return vec;
+}
+
+void printMatrixStats(const COOMatrix& coo) {
+    std::cout << "Matrix Statistics:" << std::endl;
+    std::cout << "  Dimensions: " << coo.m << " x " << coo.n << std::endl;
+    std::cout << "  Non-zeros: " << coo.nnz << std::endl;
+    std::cout << "  Density: " << (100.0 * coo.nnz) / (coo.m * coo.n) << "%" << std::endl;
+}
+
+void generateRandomVector(FloatType *d_x, int n, int seed) {
+    FloatType *h_x = new FloatType[n];
+    srand(seed);
+    
+    for (int i = 0; i < n; i++) {
+        h_x[i] = (FloatType)rand() / RAND_MAX;
+    }
+    
+    CUDA_CHECK(cudaMemcpy(d_x, h_x, n * sizeof(FloatType), cudaMemcpyHostToDevice));
+    delete[] h_x;
+}
+
+void freeCSRMatrix(CSRMatrix& csr) {
+    if (csr.d_row_ptr != nullptr) {
+        CUDA_CHECK(cudaFree(csr.d_row_ptr));
+        csr.d_row_ptr = nullptr;
+    }
+    if (csr.d_col_idx != nullptr) {
+        CUDA_CHECK(cudaFree(csr.d_col_idx));
+        csr.d_col_idx = nullptr;
+    }
+    if (csr.d_values != nullptr) {
+        CUDA_CHECK(cudaFree(csr.d_values));
+        csr.d_values = nullptr;
+    }
+}
+
+void freeELLMatrix(ELLMatrix& ell) {
+    if (ell.d_col_idx != nullptr) {
+        CUDA_CHECK(cudaFree(ell.d_col_idx));
+        ell.d_col_idx = nullptr;
+    }
+    if (ell.d_values != nullptr) {
+        CUDA_CHECK(cudaFree(ell.d_values));
+        ell.d_values = nullptr;
+    }
+}
+
+void freeJDSMatrix(JDSMatrix& jds) {
+    if (jds.d_perm != nullptr) {
+        CUDA_CHECK(cudaFree(jds.d_perm));
+        jds.d_perm = nullptr;
+    }
+    if (jds.d_diag_len != nullptr) {
+        CUDA_CHECK(cudaFree(jds.d_diag_len));
+        jds.d_diag_len = nullptr;
+    }
+    if (jds.d_col_start != nullptr) {
+        CUDA_CHECK(cudaFree(jds.d_col_start));
+        jds.d_col_start = nullptr;
+    }
+    if (jds.d_col_idx != nullptr) {
+        CUDA_CHECK(cudaFree(jds.d_col_idx));
+        jds.d_col_idx = nullptr;
+    }
+    if (jds.d_values != nullptr) {
+        CUDA_CHECK(cudaFree(jds.d_values));
+        jds.d_values = nullptr;
+    }
+}
+
+void spmvCPU_CSR(int m, int n, const int *row_ptr, const int *col_idx, 
+                 const FloatType *values, const FloatType *x, FloatType *y) {
+    for (int i = 0; i < m; i++) {
+        y[i] = 0.0f;
+        for (int j = row_ptr[i]; j < row_ptr[i + 1]; j++) {
+            y[i] += values[j] * x[col_idx[j]];
+        }
+    }
+}
+
+void spmvCPU_ELL(int m, int n, int max_row_len, const int *col_idx, 
+                 const FloatType *values, const FloatType *x, FloatType *y) {
+    for (int i = 0; i < m; i++) {
+        y[i] = 0.0f;
+        for (int j = 0; j < max_row_len; j++) {
+            int col = col_idx[i * max_row_len + j];
+            if (col >= 0) {
+                y[i] += values[i * max_row_len + j] * x[col];
+            }
+        }
+    }
+}
+
+void spmvCPU_JDS(int m, int n, const int *perm, const int *diag_len, const int *col_start,
+                 const int *col_idx, const FloatType *values, const FloatType *x, FloatType *y) {
+    std::fill(y, y + m, 0.0f);
+    
+    for (int i = 0; i < m; i++) {
+        int row = perm[i];
+        int len = diag_len[i];
+        
+        for (int j = 0; j < len; j++) {
+            int idx = col_start[i] + j;
+            y[row] += values[idx] * x[col_idx[idx]];
+        }
+    }
 }

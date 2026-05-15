@@ -13,4 +13,4 @@
 
 module load CUDA/11.8.0
 
-./PrefixSum_template 20 0
+./spmv_csr ./ASIC_680ks.mtx 4 100

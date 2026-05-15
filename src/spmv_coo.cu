@@ -4,6 +4,7 @@
 #include <iostream>
 #include <chrono>
 #include <vector>
+#include <cmath>
 
 #define BLOCK_SIZE 256
 #define WARP_SIZE 32
@@ -89,12 +90,43 @@ __global__ void cooSpMV_SegmentedReduction(int nnz, const int *row_idx, const in
     }
 }
 
+// ==================== VALIDATION UTILITIES ====================
+
+bool validateResult(const std::vector<FloatType>& gpu_result, 
+                   const std::vector<FloatType>& cpu_result,
+                   int size, const char *kernel_name) {
+    FloatType tolerance = 1e-5;
+    int error_count = 0;
+    FloatType max_error = 0.0f;
+    
+    for (int i = 0; i < size; i++) {
+        FloatType diff = fabs(gpu_result[i] - cpu_result[i]);
+        if (diff > tolerance) {
+            error_count++;
+            max_error = fmax(max_error, diff);
+            if (error_count <= 5) {  // Print first 5 errors
+                printf("  [%s] Error at index %d: GPU=%.6e, CPU=%.6e, diff=%.6e\n", 
+                       kernel_name, i, gpu_result[i], cpu_result[i], diff);
+            }
+        }
+    }
+    
+    if (error_count > 0) {
+        printf("  [%s] ✗ FAILED: %d mismatches, max error: %.6e\n", kernel_name, error_count, max_error);
+        return false;
+    } else {
+        printf("  [%s] ✓ PASSED\n", kernel_name);
+        return true;
+    }
+}
+
 // ==================== TIMING UTILITIES ====================
 
 struct KernelStats {
     const char *name;
     double avg_time_ms;
     double gflops;
+    bool validated;
 };
 
 KernelStats timeKernel_Naive(int m, int nnz,
@@ -137,6 +169,7 @@ KernelStats timeKernel_Naive(int m, int nnz,
     stats.name = name;
     stats.avg_time_ms = avg_time;
     stats.gflops = gflops;
+    stats.validated = false;
     return stats;
 }
 
@@ -181,6 +214,7 @@ KernelStats timeKernel_SharedMemory(int m, int nnz,
     stats.name = name;
     stats.avg_time_ms = avg_time;
     stats.gflops = gflops;
+    stats.validated = false;
     return stats;
 }
 
@@ -223,6 +257,7 @@ KernelStats timeKernel_SegmentedReduction(int m, int nnz,
     stats.name = name;
     stats.avg_time_ms = avg_time;
     stats.gflops = gflops;
+    stats.validated = false;
     return stats;
 }
 
@@ -243,7 +278,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
+    printf("\n╔═══════════════════════════════════════════════════════════╗\n");
     printf("║           COO Format SpMV Benchmark                       ║\n");
     printf("║     Naive vs Shared Memory vs Segmented Reduction         ║\n");
     printf("╚════════════════════════════════════════════════════════════╝\n");
@@ -336,6 +371,75 @@ int main(int argc, char *argv[]) {
                results[i].name, speedup, improvement);
     }
 
+    // ==================== CPU BASELINE VALIDATION ====================
+    printf("\n════════════════════════════════════════════════════════════\n");
+    printf("Validation Against CPU Baseline (OpenMP)\n");
+    printf("════════════════════════════════════════════════════════════\n\n");
+
+    // Allocate CPU vectors
+    std::vector<FloatType> h_x(coo.n);
+    std::vector<FloatType> h_y_cpu(coo.m, 0.0f);
+
+    // Generate same random vector on CPU
+    printf("Generating CPU random vector (seed=42)...\n");
+    srand(42);
+    for (int i = 0; i < coo.n; i++) {
+        h_x[i] = (FloatType)rand() / RAND_MAX;
+    }
+
+    // Run CPU baseline (once)
+    printf("Running CPU baseline with OpenMP...\n");
+    spmvCPU_CSR(coo.m, coo.n, 
+                reinterpret_cast<const int*>(coo.row_indices.data()), 
+                reinterpret_cast<const int*>(coo.col_indices.data()), 
+                coo.values.data(), h_x.data(), h_y_cpu.data());
+    printf("CPU baseline computation complete.\n\n");
+
+    // Validate each kernel against CPU baseline
+    printf("Comparing GPU kernels against CPU baseline:\n");
+    printf("───────────────────────────────────────────────────────────\n");
+
+    for (size_t k = 0; k < results.size(); k++) {
+        // Allocate GPU result vector
+        std::vector<FloatType> h_y_gpu(coo.m);
+
+        // Run kernel one final time and get result
+        if (k == 0) {
+            cooSpMV_Naive<<<(coo.nnz + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
+                coo.nnz, d_row_idx, d_col_idx, d_values, d_x, d_y);
+        } else if (k == 1) {
+            size_t shared_mem = BLOCK_SIZE * sizeof(FloatType);
+            cooSpMV_SharedMemory<<<(coo.nnz + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, shared_mem>>>(
+                coo.nnz, coo.m, d_row_idx, d_col_idx, d_values, d_x, d_y);
+        } else {
+            cooSpMV_SegmentedReduction<<<(coo.nnz + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
+                coo.nnz, d_row_idx, d_col_idx, d_values, d_x, d_y);
+        }
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        // Copy GPU result to host
+        CUDA_CHECK(cudaMemcpy(h_y_gpu.data(), d_y, coo.m * sizeof(FloatType), cudaMemcpyDeviceToHost));
+
+        // Validate
+        results[k].validated = validateResult(h_y_gpu, h_y_cpu, coo.m, results[k].name);
+
+        // Clear d_y for next kernel
+        CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
+    }
+
+    printf("───────────────────────────────────────────────────────────\n\n");
+
+    // Print validation summary
+    printf("Validation Summary:\n");
+    printf("═══════════════════════════════════════════════════════════\n");
+    int valid_count = 0;
+    for (const auto &stat : results) {
+        printf("%-30s: %s\n", stat.name, stat.validated ? "✓ PASSED" : "✗ FAILED");
+        if (stat.validated) valid_count++;
+    }
+    printf("═══════════════════════════════════════════════════════════\n");
+    printf("Total: %d/%d kernels validated\n\n", valid_count, (int)results.size());
+
     // Cleanup
     CUDA_CHECK(cudaFree(d_row_idx));
     CUDA_CHECK(cudaFree(d_col_idx));
@@ -343,6 +447,6 @@ int main(int argc, char *argv[]) {
     CUDA_CHECK(cudaFree(d_x));
     CUDA_CHECK(cudaFree(d_y));
 
-    printf("\n✓ COO benchmark completed successfully!\n\n");
+    printf("✓ COO benchmark completed successfully!\n\n");
     return 0;
 }
