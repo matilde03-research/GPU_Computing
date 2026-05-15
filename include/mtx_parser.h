@@ -86,7 +86,7 @@ void spmvCPU_ELL(int m, int n, int max_row_len, const int *col_idx,
                  const FloatType *values, const FloatType *x, FloatType *y);
 
 
-void allocateCSRMatrixGPU(CSRMatrix& csr) {
+inline void allocateCSRMatrixGPU(CSRMatrix& csr) {
     CUDA_CHECK(cudaMalloc(&csr.d_row_ptr, (csr.m + 1) * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&csr.d_col_idx, csr.nnz * sizeof(int)));
     CUDA_CHECK(cudaMalloc(&csr.d_values, csr.nnz * sizeof(FloatType)));

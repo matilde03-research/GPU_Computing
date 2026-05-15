@@ -26,7 +26,7 @@ __global__ void cooSpMV(int nnz, const int *row_idx, const int *col_idx,
 
 // Kernel 2: COO-SegmentedReduction (improved with segmented warp operations)
 // Groups non-zeros by row and performs efficient segmented reduction within warps
-__global__ void cooSpMV_SegmentedReduction(int nnz, const int *row_idx, const int *col_idx, 
+/*__global__ void cooSpMV_SegmentedReduction(int nnz, const int *row_idx, const int *col_idx, 
                                            const FloatType *values, const FloatType *x, FloatType *y) {
     int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / WARP_SIZE;
     int lane = threadIdx.x % WARP_SIZE;
@@ -44,7 +44,58 @@ __global__ void cooSpMV_SegmentedReduction(int nnz, const int *row_idx, const in
         // Accumulate using atomicAdd
         atomicAdd(&y[row], val * x[col]);
     }
+}*/
+__global__ void cooSpMV_SegmentedReduction(
+        int nnz,
+        const int       *__restrict__ row_idx,
+        const int       *__restrict__ col_idx,
+        const FloatType *__restrict__ values,
+        const FloatType *__restrict__ x,
+        FloatType        *__restrict__ y)
+{
+    const unsigned FULL_MASK = 0xFFFFFFFFu;
+
+    int tid  = blockIdx.x * blockDim.x + threadIdx.x;
+    int lane = threadIdx.x & (WARP_SIZE - 1);
+
+    // Each thread loads one non-zero
+    FloatType val = 0;
+    int       row = -1;
+    if (tid < nnz) {
+        row = row_idx[tid];
+        val = values[tid] * x[col_idx[tid]];
+    }
+
+    // Intra-warp inclusive segmented scan:
+    // propagate left neighbour's value only if same row
+    #pragma unroll
+    for (int offset = 1; offset < WARP_SIZE; offset <<= 1) {
+        FloatType nb_val = __shfl_up_sync(FULL_MASK, val, offset);
+        int       nb_row = __shfl_up_sync(FULL_MASK, row, offset);
+        if (lane >= offset && nb_row == row)
+            val += nb_val;
+    }
+
+    // Flush: a lane flushes if it is the last lane of its segment within
+    // this warp.  "Last lane of segment" means either:
+    //   (a) the next lane (lane+1) has a different row, OR
+    //   (b) this is lane 31 (warp edge) — segment may continue next warp,
+    //       so we flush a partial sum; the next warp will add the rest.
+    //
+    // Idle threads (row == -1) never flush.
+    if (tid < nnz) {
+        // Get next lane's row; for lane 31 there is no next lane —
+        // use __shfl_down_sync which returns src lane's own value when
+        // the source is out of range (i.e. gives row again → equal →
+        // would NOT flush), so we must handle lane 31 explicitly.
+        int next_row = (lane < WARP_SIZE - 1)
+                       ? __shfl_down_sync(FULL_MASK, row, 1)
+                       : row - 1;  // force inequality for lane 31
+        if (next_row != row)
+            atomicAdd(&y[row], val);
+    }
 }
+
 
 // ==================== VALIDATION UTILITIES ====================
 
@@ -224,8 +275,7 @@ int main(int argc, char *argv[]) {
     generateRandomVector(d_x, coo.n, 42);
 
     printf("\n═══════════════════════════════════════════════════════════\n");
-    printf("COO SpMV Benchmark Results\n");
-    printf("Matrix: %d × %d, NNZ: %d\n", coo.m, coo.n, coo.nnz);
+    printf("COO SpMV Details\n");
     printf("Grid size: %d, Block size: %d\n", (coo.nnz + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE);
     printf("Warmup cycles: %d, Iterations: %d\n", warmup, iterations);
     
@@ -319,6 +369,7 @@ int main(int argc, char *argv[]) {
             cooSpMV<<<(coo.nnz + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
                 coo.nnz, d_row_idx, d_col_idx, d_values, d_x, d_y);
         } else {
+            CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
             cooSpMV_SegmentedReduction<<<(coo.nnz + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
                 coo.nnz, d_row_idx, d_col_idx, d_values, d_x, d_y);
         }
@@ -333,7 +384,6 @@ int main(int argc, char *argv[]) {
         // Clear d_y for next kernel
         CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
     }
-
     
     printf("═══════════════════════════════════════════════════════════\n");
 

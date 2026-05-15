@@ -532,7 +532,7 @@ int main(int argc, char *argv[])
 
     printf("Loading matrix from: %s\n", mtx_file);
     COOMatrix coo = readMatrixMarket(mtx_file);
-    printMatrixStats(coo);
+    
 
     printf("\nConverting to CSR format...\n");
     CSRMatrix csr = cooToCSR(coo);

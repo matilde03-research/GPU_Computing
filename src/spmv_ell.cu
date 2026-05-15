@@ -134,7 +134,7 @@ int main(int argc, char *argv[]) {
     // Read matrix
     printf("Loading matrix from: %s\n", mtx_file);
     COOMatrix coo = readMatrixMarket(mtx_file);
-    printMatrixStats(coo);
+    
 
     // Convert to ELL
     printf("\nConverting to ELL format...\n");
