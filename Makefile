@@ -13,7 +13,7 @@ CUDA_LIBS = -lcuda -lcusparse
 PARSER_OBJ = $(SRC_DIR)/mtx_parser.o
 
 # Main executable targets
-TARGETS = $(BIN_DIR)/spmv_csr1 $(BIN_DIR)/spmv_ell $(BIN_DIR)/spmv_jds $(BIN_DIR)/spmv_cusparse
+TARGETS = $(BIN_DIR)/spmv_coo $(BIN_DIR)/spmv_csr $(BIN_DIR)/spmv_ell $(BIN_DIR)/spmv_cusparse
 
 # Default target
 all: $(BIN_DIR) $(PARSER_OBJ) $(TARGETS)
@@ -27,15 +27,15 @@ $(PARSER_OBJ): $(SRC_DIR)/mtx_parser.cu
 	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 
 # Build CSR executable
-$(BIN_DIR)/spmv_csr1: $(SRC_DIR)/spmv_csr1.cu $(PARSER_OBJ)
+$(BIN_DIR)/spmv_csr: $(SRC_DIR)/spmv_csr.cu $(PARSER_OBJ)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $^ $(CUDA_LIBS)
+
+# Build COO executable
+$(BIN_DIR)/spmv_coo: $(SRC_DIR)/spmv_coo.cu $(PARSER_OBJ)
 	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $^ $(CUDA_LIBS)
 
 # Build ELL executable
 $(BIN_DIR)/spmv_ell: $(SRC_DIR)/spmv_ell.cu $(PARSER_OBJ)
-	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $^ $(CUDA_LIBS)
-
-# Build JDS executable
-$(BIN_DIR)/spmv_jds: $(SRC_DIR)/spmv_jds.cu $(PARSER_OBJ)
 	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -o $@ $^ $(CUDA_LIBS)
 
 # Build cuSPARSE executable

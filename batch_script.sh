@@ -13,4 +13,4 @@
 
 module load CUDA/11.8.0
 
-./bin/spmv_csr1 ./ASIC_680ks.mtx 4 100
+./bin/spmv_coo ./ASIC_680ks.mtx 4 100

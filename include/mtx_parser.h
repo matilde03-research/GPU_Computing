@@ -63,47 +63,20 @@ struct ELLMatrix {
           col_idx(col_idx_), values(values_) {}
 };
 
-struct JDSMatrix {
-    int m, n, nnz;
-    std::vector<int> perm;
-    std::vector<int> diag_len;
-    std::vector<int> col_start;
-    std::vector<int> col_idx;
-    std::vector<FloatType> values;
-    
-    // GPU pointers
-    int *d_perm = nullptr;
-    int *d_diag_len = nullptr;
-    int *d_col_start = nullptr;
-    int *d_col_idx = nullptr;
-    FloatType *d_values = nullptr;
-    
-    // Constructor
-    JDSMatrix() = default;
-    JDSMatrix(int m_, int n_, int nnz_,
-              std::vector<int> perm_,
-              std::vector<int> diag_len_,
-              std::vector<int> col_start_,
-              std::vector<int> col_idx_, 
-              std::vector<FloatType> values_)
-        : m(m_), n(n_), nnz(nnz_), 
-          perm(perm_), diag_len(diag_len_), col_start(col_start_),
-          col_idx(col_idx_), values(values_) {}
-};
 
 // Function declarations
 COOMatrix readMatrixMarket(const char* filename);
 CSRMatrix cooToCSR(const COOMatrix& coo);
 ELLMatrix cooToELL(const COOMatrix& coo);
-JDSMatrix cooToJDS(const COOMatrix& coo);
 
-void printMatrixStats(const COOMatrix& coo);
+
+
 void generateRandomVector(FloatType *d_x, int n, int seed);
 
 // Cleanup functions
 void freeCSRMatrix(CSRMatrix& csr);
 void freeELLMatrix(ELLMatrix& ell);
-void freeJDSMatrix(JDSMatrix& jds);
+
 
 // CPU baseline validation (OpenMP)
 void spmvCPU_CSR(int m, int n, const int *row_ptr, const int *col_idx, 
@@ -112,8 +85,16 @@ void spmvCPU_CSR(int m, int n, const int *row_ptr, const int *col_idx,
 void spmvCPU_ELL(int m, int n, int max_row_len, const int *col_idx, 
                  const FloatType *values, const FloatType *x, FloatType *y);
 
-void spmvCPU_JDS(int m, int n, const int *perm, const int *diag_len, const int *col_start,
-                 const int *col_idx, const FloatType *values, const FloatType *x, FloatType *y);
+
+void allocateCSRMatrixGPU(CSRMatrix& csr) {
+    CUDA_CHECK(cudaMalloc(&csr.d_row_ptr, (csr.m + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&csr.d_col_idx, csr.nnz * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&csr.d_values, csr.nnz * sizeof(FloatType)));
+    
+    CUDA_CHECK(cudaMemcpy(csr.d_row_ptr, csr.row_ptr.data(), (csr.m + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(csr.d_col_idx, csr.col_idx.data(), csr.nnz * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(csr.d_values, csr.values.data(), csr.nnz * sizeof(FloatType), cudaMemcpyHostToDevice));
+}
 
 #endif
 

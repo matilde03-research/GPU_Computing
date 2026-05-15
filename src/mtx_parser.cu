@@ -161,54 +161,6 @@ ELLMatrix cooToELL(const COOMatrix& coo) {
     return {coo.m, coo.n, coo.nnz, max_nnz_per_row, col_idx, values};
 }
 
-JDSMatrix cooToJDS(const COOMatrix& coo) {
-    std::vector<int> nnz_per_row(coo.m, 0);
-    for (int i = 0; i < coo.nnz; i++) {
-        nnz_per_row[coo.row_indices[i]]++;
-    }
-
-    std::vector<int> perm(coo.m);
-    for (int i = 0; i < coo.m; i++) {
-        perm[i] = i;
-    }
-
-    std::sort(perm.begin(), perm.end(), [&nnz_per_row](int a, int b) {
-        return nnz_per_row[a] > nnz_per_row[b];
-    });
-
-    std::vector<int> col_idx;
-    std::vector<FloatType> values;
-    std::vector<int> diag_len(coo.m);
-
-    std::vector<std::vector<std::pair<int, FloatType>>> row_data(coo.m);
-    for (int i = 0; i < coo.nnz; i++) {
-        int row = coo.row_indices[i];
-        int col = coo.col_indices[i];
-        FloatType val = coo.values[i];
-        row_data[row].push_back({col, val});
-    }
-
-    for (int i = 0; i < coo.m; i++) {
-        std::sort(row_data[i].begin(), row_data[i].end());
-    }
-
-    std::vector<int> col_start;
-    col_start.push_back(0);
-
-    for (int i = 0; i < coo.m; i++) {
-        int row = perm[i];
-        diag_len[i] = row_data[row].size();
-        
-        for (int j = 0; j < row_data[row].size(); j++) {
-            col_idx.push_back(row_data[row][j].first);
-            values.push_back(row_data[row][j].second);
-        }
-        
-        col_start.push_back(col_idx.size());
-    }
-
-    return {coo.m, coo.n, coo.nnz, perm, diag_len, col_start, col_idx, values};
-}
 
 std::vector<FloatType> generateRandomVector(int size, int seed) {
     std::vector<FloatType> vec(size);
@@ -221,12 +173,6 @@ std::vector<FloatType> generateRandomVector(int size, int seed) {
     return vec;
 }
 
-void printMatrixStats(const COOMatrix& coo) {
-    std::cout << "Matrix Statistics:" << std::endl;
-    std::cout << "  Dimensions: " << coo.m << " x " << coo.n << std::endl;
-    std::cout << "  Non-zeros: " << coo.nnz << std::endl;
-    std::cout << "  Density: " << (100.0 * coo.nnz) / (coo.m * coo.n) << "%" << std::endl;
-}
 
 void generateRandomVector(FloatType *d_x, int n, int seed) {
     FloatType *h_x = new FloatType[n];
@@ -266,28 +212,6 @@ void freeELLMatrix(ELLMatrix& ell) {
     }
 }
 
-void freeJDSMatrix(JDSMatrix& jds) {
-    if (jds.d_perm != nullptr) {
-        CUDA_CHECK(cudaFree(jds.d_perm));
-        jds.d_perm = nullptr;
-    }
-    if (jds.d_diag_len != nullptr) {
-        CUDA_CHECK(cudaFree(jds.d_diag_len));
-        jds.d_diag_len = nullptr;
-    }
-    if (jds.d_col_start != nullptr) {
-        CUDA_CHECK(cudaFree(jds.d_col_start));
-        jds.d_col_start = nullptr;
-    }
-    if (jds.d_col_idx != nullptr) {
-        CUDA_CHECK(cudaFree(jds.d_col_idx));
-        jds.d_col_idx = nullptr;
-    }
-    if (jds.d_values != nullptr) {
-        CUDA_CHECK(cudaFree(jds.d_values));
-        jds.d_values = nullptr;
-    }
-}
 
 void spmvCPU_CSR(int m, int n, const int *row_ptr, const int *col_idx, 
                  const FloatType *values, const FloatType *x, FloatType *y) {
@@ -312,17 +236,3 @@ void spmvCPU_ELL(int m, int n, int max_row_len, const int *col_idx,
     }
 }
 
-void spmvCPU_JDS(int m, int n, const int *perm, const int *diag_len, const int *col_start,
-                 const int *col_idx, const FloatType *values, const FloatType *x, FloatType *y) {
-    std::fill(y, y + m, 0.0f);
-    
-    for (int i = 0; i < m; i++) {
-        int row = perm[i];
-        int len = diag_len[i];
-        
-        for (int j = 0; j < len; j++) {
-            int idx = col_start[i] + j;
-            y[row] += values[idx] * x[col_idx[idx]];
-        }
-    }
-}

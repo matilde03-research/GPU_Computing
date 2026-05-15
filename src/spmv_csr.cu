@@ -536,6 +536,7 @@ int main(int argc, char *argv[])
 
     printf("\nConverting to CSR format...\n");
     CSRMatrix csr = cooToCSR(coo);
+    allocateCSRMatrixGPU(csr);
 
     // Row-length statistics
     std::vector<int> h_row_ptr(coo.m + 1);
