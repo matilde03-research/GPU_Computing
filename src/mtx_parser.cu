@@ -4,319 +4,392 @@
 #include <algorithm>
 #include <cstring>
 #include <iostream>
-#include <cstdlib>
-#include <map>
-#include <curand_kernel.h>
+#include <chrono>
+#include <omp.h>
+#include <cmath>
 
-// Parse Matrix Market file
-COOMatrix readMatrixMarket(const std::string& filename) {
+COOMatrix readMatrixMarket(const char* filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
-        fprintf(stderr, "Error: Cannot open file %s\n", filename.c_str());
-        exit(EXIT_FAILURE);
+        fprintf(stderr, "Error: Cannot open file %s\n", filename);
+        exit(1);
     }
 
-    COOMatrix coo = {0, 0, 0, {}, {}, {}};
     std::string line;
-    
-    // Read header
+    int m = 0, n = 0, nnz = 0;
+    bool is_symmetric = false;
+
     while (std::getline(file, line)) {
-        if (line[0] != '%') break;  // Skip comment lines
+        if (line[0] == '%') {
+            if (line.find("symmetric") != std::string::npos) {
+                is_symmetric = true;
+            }
+            continue;
+        }
+        std::istringstream iss(line);
+        iss >> m >> n >> nnz;
+        break;
     }
 
-    // Parse dimensions and nnz
-    std::istringstream iss(line);
-    if (!(iss >> coo.m >> coo.n >> coo.nnz)) {
-        fprintf(stderr, "Error: Invalid Matrix Market header\n");
-        exit(EXIT_FAILURE);
+    if (m == 0 || n == 0 || nnz == 0) {
+        fprintf(stderr, "Error: Invalid matrix dimensions\n");
+        exit(1);
     }
 
-    coo.row.reserve(coo.nnz);
-    coo.col.reserve(coo.nnz);
-    coo.val.reserve(coo.nnz);
+    std::vector<int> row_indices;
+    std::vector<int> col_indices;
+    std::vector<FloatType> values;
 
-    // Read matrix entries (1-indexed in file, convert to 0-indexed)
-    int row_idx, col_idx;
-    FloatType value;
+    row_indices.reserve(nnz * (is_symmetric ? 2 : 1));
+    col_indices.reserve(nnz * (is_symmetric ? 2 : 1));
+    values.reserve(nnz * (is_symmetric ? 2 : 1));
+
+    int actual_nnz = 0;
+
     while (std::getline(file, line)) {
-        std::istringstream entry(line);
-        if (entry >> row_idx >> col_idx >> value) {
-            coo.row.push_back(row_idx - 1);  // Convert to 0-indexed
-            coo.col.push_back(col_idx - 1);
-            coo.val.push_back(value);
+        if (line.empty() || line[0] == '%') continue;
+
+        std::istringstream iss(line);
+        int i, j;
+        FloatType val = 1.0f;
+
+        if (!(iss >> i >> j)) continue;
+        if (!(iss >> val)) {
+            val = 1.0f;
+        }
+
+        i--; j--;
+
+        if (i < 0 || i >= m || j < 0 || j >= n) {
+            fprintf(stderr, "Warning: Index out of bounds (%d, %d)\n", i, j);
+            continue;
+        }
+
+        row_indices.push_back(i);
+        col_indices.push_back(j);
+        values.push_back(val);
+        actual_nnz++;
+
+        if (is_symmetric && i != j) {
+            row_indices.push_back(j);
+            col_indices.push_back(i);
+            values.push_back(val);
+            actual_nnz++;
         }
     }
 
     file.close();
-    
-    if ((int)coo.row.size() != coo.nnz) {
-        fprintf(stderr, "Warning: Read %lu entries but header specified %d\n", 
-                coo.row.size(), coo.nnz);
-        coo.nnz = (int)coo.row.size();
-    }
 
-    return coo;
+    return {m, n, actual_nnz, row_indices, col_indices, values};
 }
 
-// Convert COO to CSR format
+void printMatrixStats(const COOMatrix& coo) {
+    printf("Matrix Market file loaded:\n");
+    printf("  Dimensions: %d × %d\n", coo.m, coo.n);
+    printf("  Non-zeros: %d\n", coo.nnz);
+    printf("  Sparsity: %.2f%%\n", 100.0 * (1.0 - (double)coo.nnz / (coo.m * coo.n)));
+}
+
 CSRMatrix cooToCSR(const COOMatrix& coo) {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<int> row_ptr(coo.m + 1, 0);
+    std::vector<int> col_idx(coo.nnz);
+    std::vector<FloatType> values(coo.nnz);
+
+    std::vector<int> indices(coo.nnz);
+    for (int i = 0; i < coo.nnz; i++) {
+        indices[i] = i;
+    }
+
+    std::sort(indices.begin(), indices.end(), [&coo](int a, int b) {
+        if (coo.row_indices[a] != coo.row_indices[b]) {
+            return coo.row_indices[a] < coo.row_indices[b];
+        }
+        return coo.col_indices[a] < coo.col_indices[b];
+    });
+
+    for (int i = 0; i < coo.nnz; i++) {
+        int idx = indices[i];
+        col_idx[i] = coo.col_indices[idx];
+        values[i] = coo.values[idx];
+    }
+
+    for (int i = 0; i < coo.nnz; i++) {
+        int idx = indices[i];
+        int row = coo.row_indices[idx];
+        row_ptr[row + 1]++;
+    }
+
+    for (int i = 1; i <= coo.m; i++) {
+        row_ptr[i] += row_ptr[i - 1];
+    }
+
+    // Allocate GPU memory
+    int *d_row_ptr, *d_col_idx;
+    FloatType *d_values;
+    CUDA_CHECK(cudaMalloc(&d_row_ptr, (coo.m + 1) * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_col_idx, coo.nnz * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_values, coo.nnz * sizeof(FloatType)));
+
+    CUDA_CHECK(cudaMemcpy(d_row_ptr, row_ptr.data(), (coo.m + 1) * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_col_idx, col_idx.data(), coo.nnz * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_values, values.data(), coo.nnz * sizeof(FloatType), cudaMemcpyHostToDevice));
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    printf("CSR conversion time: %.4f ms\n", elapsed);
+
     CSRMatrix csr;
     csr.m = coo.m;
     csr.n = coo.n;
     csr.nnz = coo.nnz;
-
-    // Create host CSR data
-    csr.h_row_ptr = new int[coo.m + 1]();
-    csr.h_col_idx = new int[coo.nnz];
-    csr.h_values = new FloatType[coo.nnz];
-
-    // Count non-zeros per row
-    for (int i = 0; i < coo.nnz; i++) {
-        csr.h_row_ptr[coo.row[i] + 1]++;
-    }
-
-    // Compute row pointers
-    for (int i = 0; i < coo.m; i++) {
-        csr.h_row_ptr[i + 1] += csr.h_row_ptr[i];
-    }
-
-    // Sort entries by row and fill CSR
-    std::vector<int> row_count(coo.m, 0);
-    for (int i = 0; i < coo.nnz; i++) {
-        int row = coo.row[i];
-        int pos = csr.h_row_ptr[row] + row_count[row]++;
-        csr.h_col_idx[pos] = coo.col[i];
-        csr.h_values[pos] = coo.val[i];
-    }
-
-    // Copy to device
-    CUDA_CHECK(cudaMalloc(&csr.d_row_ptr, (coo.m + 1) * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&csr.d_col_idx, coo.nnz * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&csr.d_values, coo.nnz * sizeof(FloatType)));
-
-    CUDA_CHECK(cudaMemcpy(csr.d_row_ptr, csr.h_row_ptr, (coo.m + 1) * sizeof(int), 
-                          cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(csr.d_col_idx, csr.h_col_idx, coo.nnz * sizeof(int), 
-                          cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(csr.d_values, csr.h_values, coo.nnz * sizeof(FloatType), 
-                          cudaMemcpyHostToDevice));
+    csr.row_ptr = row_ptr;
+    csr.col_idx = col_idx;
+    csr.values = values;
+    csr.d_row_ptr = d_row_ptr;
+    csr.d_col_idx = d_col_idx;
+    csr.d_values = d_values;
 
     return csr;
 }
 
-// Convert COO to ELL format
 ELLMatrix cooToELL(const COOMatrix& coo) {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<int> nnz_per_row(coo.m, 0);
+    for (int i = 0; i < coo.nnz; i++) {
+        nnz_per_row[coo.row_indices[i]]++;
+    }
+
+    int max_row_len = *std::max_element(nnz_per_row.begin(), nnz_per_row.end());
+
+    std::vector<int> col_idx(coo.m * max_row_len, -1);
+    std::vector<FloatType> values(coo.m * max_row_len, 0.0f);
+
+    std::vector<int> row_positions(coo.m, 0);
+
+    std::vector<int> indices(coo.nnz);
+    for (int i = 0; i < coo.nnz; i++) {
+        indices[i] = i;
+    }
+
+    std::sort(indices.begin(), indices.end(), [&coo](int a, int b) {
+        if (coo.row_indices[a] != coo.row_indices[b]) {
+            return coo.row_indices[a] < coo.row_indices[b];
+        }
+        return coo.col_indices[a] < coo.col_indices[b];
+    });
+
+    for (int i = 0; i < coo.nnz; i++) {
+        int idx = indices[i];
+        int row = coo.row_indices[idx];
+        int col = coo.col_indices[idx];
+        FloatType val = coo.values[idx];
+
+        int pos = row_positions[row];
+        col_idx[row * max_row_len + pos] = col;
+        values[row * max_row_len + pos] = val;
+        row_positions[row]++;
+    }
+
+    // Allocate GPU memory
+    int *d_col_idx;
+    FloatType *d_values;
+    CUDA_CHECK(cudaMalloc(&d_col_idx, coo.m * max_row_len * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_values, coo.m * max_row_len * sizeof(FloatType)));
+
+    CUDA_CHECK(cudaMemcpy(d_col_idx, col_idx.data(), coo.m * max_row_len * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_values, values.data(), coo.m * max_row_len * sizeof(FloatType), cudaMemcpyHostToDevice));
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    printf("ELL conversion time: %.4f ms\n", elapsed);
+
     ELLMatrix ell;
     ell.m = coo.m;
     ell.n = coo.n;
     ell.nnz = coo.nnz;
-
-    // Find maximum row length
-    std::vector<int> row_lengths(coo.m, 0);
-    for (int i = 0; i < coo.nnz; i++) {
-        row_lengths[coo.row[i]]++;
-    }
-    ell.max_row_len = *std::max_element(row_lengths.begin(), row_lengths.end());
-
-    // Create host ELL data (padded to max_row_len)
-    ell.h_col_idx = new int[coo.m * ell.max_row_len];
-    ell.h_values = new FloatType[coo.m * ell.max_row_len];
-    
-    // Initialize with invalid column index (-1) and zero values
-    for (int i = 0; i < coo.m * ell.max_row_len; i++) {
-        ell.h_col_idx[i] = -1;
-        ell.h_values[i] = 0.0f;
-    }
-
-    // Fill ELL format (column-major order for better memory access)
-    std::vector<int> col_count(coo.m, 0);
-    for (int i = 0; i < coo.nnz; i++) {
-        int row = coo.row[i];
-        int col_pos = col_count[row]++;
-        ell.h_col_idx[col_pos * coo.m + row] = coo.col[i];
-        ell.h_values[col_pos * coo.m + row] = coo.val[i];
-    }
-
-    // Copy to device
-    CUDA_CHECK(cudaMalloc(&ell.d_col_idx, coo.m * ell.max_row_len * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&ell.d_values, coo.m * ell.max_row_len * sizeof(FloatType)));
-
-    CUDA_CHECK(cudaMemcpy(ell.d_col_idx, ell.h_col_idx, coo.m * ell.max_row_len * sizeof(int), 
-                          cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(ell.d_values, ell.h_values, coo.m * ell.max_row_len * sizeof(FloatType), 
-                          cudaMemcpyHostToDevice));
+    ell.max_row_len = max_row_len;
+    ell.col_idx = col_idx;
+    ell.values = values;
+    ell.d_col_idx = d_col_idx;
+    ell.d_values = d_values;
 
     return ell;
 }
 
-// Convert COO to JDS format
 JDSMatrix cooToJDS(const COOMatrix& coo) {
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    std::vector<int> nnz_per_row(coo.m, 0);
+    for (int i = 0; i < coo.nnz; i++) {
+        nnz_per_row[coo.row_indices[i]]++;
+    }
+
+    std::vector<int> perm(coo.m);
+    for (int i = 0; i < coo.m; i++) {
+        perm[i] = i;
+    }
+
+    std::sort(perm.begin(), perm.end(), [&nnz_per_row](int a, int b) {
+        return nnz_per_row[a] > nnz_per_row[b];
+    });
+
+    std::vector<std::vector<std::pair<int, FloatType>>> row_data(coo.m);
+    for (int i = 0; i < coo.nnz; i++) {
+        int row = coo.row_indices[i];
+        int col = coo.col_indices[i];
+        FloatType val = coo.values[i];
+        row_data[row].push_back({col, val});
+    }
+
+    for (int i = 0; i < coo.m; i++) {
+        std::sort(row_data[i].begin(), row_data[i].end());
+    }
+
+    std::vector<int> diag_len;
+    std::vector<int> col_start;
+    std::vector<int> col_idx;
+    std::vector<FloatType> values;
+
+    // Find max row length to determine number of diagonals
+    int max_diag = 0;
+    for (int i = 0; i < coo.m; i++) {
+        max_diag = std::max(max_diag, (int)row_data[perm[i]].size());
+    }
+
+    col_start.resize(max_diag);
+    diag_len.resize(max_diag, 0);
+
+    // Build diagonals
+    for (int d = 0; d < max_diag; d++) {
+        col_start[d] = col_idx.size();
+        for (int i = 0; i < coo.m; i++) {
+            if ((int)row_data[perm[i]].size() > d) {
+                col_idx.push_back(row_data[perm[i]][d].first);
+                values.push_back(row_data[perm[i]][d].second);
+                diag_len[d]++;
+            }
+        }
+    }
+
+    // Allocate GPU memory
+    int *d_perm, *d_col_start, *d_diag_len, *d_col_idx;
+    FloatType *d_values;
+    
+    CUDA_CHECK(cudaMalloc(&d_perm, coo.m * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_col_start, max_diag * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_diag_len, max_diag * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_col_idx, coo.nnz * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&d_values, coo.nnz * sizeof(FloatType)));
+
+    CUDA_CHECK(cudaMemcpy(d_perm, perm.data(), coo.m * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_col_start, col_start.data(), max_diag * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_diag_len, diag_len.data(), max_diag * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_col_idx, col_idx.data(), coo.nnz * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_values, values.data(), coo.nnz * sizeof(FloatType), cudaMemcpyHostToDevice));
+
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+    
+    printf("JDS conversion time: %.4f ms\n", elapsed);
+
     JDSMatrix jds;
     jds.m = coo.m;
     jds.n = coo.n;
     jds.nnz = coo.nnz;
-
-    // Count non-zeros per row
-    std::vector<int> row_lengths(coo.m, 0);
-    for (int i = 0; i < coo.nnz; i++) {
-        row_lengths[coo.row[i]]++;
-    }
-
-    // Create permutation based on row lengths (descending)
-    std::vector<std::pair<int, int>> row_pairs;
-    for (int i = 0; i < coo.m; i++) {
-        row_pairs.push_back({row_lengths[i], i});
-    }
-    std::sort(row_pairs.begin(), row_pairs.end(), std::greater<std::pair<int, int>>());
-
-    // Create permutation and inverse permutation arrays
-    jds.h_perm = new int[coo.m];
-    jds.h_iperm = new int[coo.m];
-    for (int i = 0; i < coo.m; i++) {
-        jds.h_perm[i] = row_pairs[i].second;
-        jds.h_iperm[row_pairs[i].second] = i;
-    }
-
-    // Build diagonal structure
-    std::vector<std::vector<int>> diag_col_idx;
-    std::vector<std::vector<FloatType>> diag_values;
-    std::vector<int> cur_pos(coo.m, 0);
-
-    for (int diag = 0; diag < row_pairs[0].first; diag++) {
-        std::vector<int> col_idx;
-        std::vector<FloatType> values;
-        
-        for (int i = 0; i < coo.m; i++) {
-            int orig_row = jds.h_perm[i];
-            if (cur_pos[orig_row] < row_lengths[orig_row]) {
-                // Find the diag-th non-zero for this row
-                int count = 0;
-                for (int j = 0; j < coo.nnz; j++) {
-                    if (coo.row[j] == orig_row) {
-                        if (count == cur_pos[orig_row]) {
-                            col_idx.push_back(coo.col[j]);
-                            values.push_back(coo.val[j]);
-                            cur_pos[orig_row]++;
-                            break;
-                        }
-                        count++;
-                    }
-                }
-            }
-        }
-        
-        if (!col_idx.empty()) {
-            diag_col_idx.push_back(col_idx);
-            diag_values.push_back(values);
-        }
-    }
-
-    // Store diagonals in JDS format
-    int total_diags = (int)diag_col_idx.size();
-    jds.h_col_start = new int[total_diags];
-    jds.h_diag_len = new int[total_diags];
-    
-    int col_pos = 0;
-    int total_entries = 0;
-    for (int d = 0; d < total_diags; d++) {
-        jds.h_col_start[d] = col_pos;
-        jds.h_diag_len[d] = (int)diag_col_idx[d].size();
-        col_pos += (int)diag_col_idx[d].size();
-        total_entries += (int)diag_col_idx[d].size();
-    }
-
-    // Flatten diagonal data
-    jds.h_col_idx = new int[total_entries];
-    jds.h_values = new FloatType[total_entries];
-    
-    col_pos = 0;
-    for (int d = 0; d < total_diags; d++) {
-        for (int i = 0; i < (int)diag_col_idx[d].size(); i++) {
-            jds.h_col_idx[col_pos] = diag_col_idx[d][i];
-            jds.h_values[col_pos] = diag_values[d][i];
-            col_pos++;
-        }
-    }
-
-    // Copy to device
-    CUDA_CHECK(cudaMalloc(&jds.d_perm, coo.m * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&jds.d_iperm, coo.m * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&jds.d_col_start, total_diags * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&jds.d_diag_len, total_diags * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&jds.d_col_idx, total_entries * sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&jds.d_values, total_entries * sizeof(FloatType)));
-
-    CUDA_CHECK(cudaMemcpy(jds.d_perm, jds.h_perm, coo.m * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(jds.d_iperm, jds.h_iperm, coo.m * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(jds.d_col_start, jds.h_col_start, total_diags * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(jds.d_diag_len, jds.h_diag_len, total_diags * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(jds.d_col_idx, jds.h_col_idx, total_entries * sizeof(int), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(jds.d_values, jds.h_values, total_entries * sizeof(FloatType), cudaMemcpyHostToDevice));
+    jds.perm = perm;
+    jds.col_start = col_start;
+    jds.diag_len = diag_len;
+    jds.col_idx = col_idx;
+    jds.values = values;
+    jds.d_perm = d_perm;
+    jds.d_col_start = d_col_start;
+    jds.d_diag_len = d_diag_len;
+    jds.d_col_idx = d_col_idx;
+    jds.d_values = d_values;
 
     return jds;
 }
 
-// Generate random vector with fixed seed
-__global__ void fillRandomVector(FloatType *d_vector, int size, unsigned int seed) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < size) {
-        curandState state;
-        curand_init(seed, idx, 0, &state);
-        d_vector[idx] = curand_uniform(&state);
+void freeCSRMatrix(CSRMatrix& csr) {
+    CUDA_CHECK(cudaFree(csr.d_row_ptr));
+    CUDA_CHECK(cudaFree(csr.d_col_idx));
+    CUDA_CHECK(cudaFree(csr.d_values));
+    csr.row_ptr.clear();
+    csr.col_idx.clear();
+    csr.values.clear();
+}
+
+void freeELLMatrix(ELLMatrix& ell) {
+    CUDA_CHECK(cudaFree(ell.d_col_idx));
+    CUDA_CHECK(cudaFree(ell.d_values));
+    ell.col_idx.clear();
+    ell.values.clear();
+}
+
+void freeJDSMatrix(JDSMatrix& jds) {
+    CUDA_CHECK(cudaFree(jds.d_perm));
+    CUDA_CHECK(cudaFree(jds.d_col_start));
+    CUDA_CHECK(cudaFree(jds.d_diag_len));
+    CUDA_CHECK(cudaFree(jds.d_col_idx));
+    CUDA_CHECK(cudaFree(jds.d_values));
+    jds.perm.clear();
+    jds.col_start.clear();
+    jds.diag_len.clear();
+    jds.col_idx.clear();
+    jds.values.clear();
+}
+
+void generateRandomVector(FloatType *d_x, int n, int seed) {
+    std::vector<FloatType> h_x(n);
+    srand(seed);
+    for (int i = 0; i < n; i++) {
+        h_x[i] = (FloatType)rand() / RAND_MAX;
+    }
+    CUDA_CHECK(cudaMemcpy(d_x, h_x.data(), n * sizeof(FloatType), cudaMemcpyHostToDevice));
+}
+
+// CPU baseline: straightforward OpenMP implementation
+void csrSpMV_CPU(int m, int n, const int *row_ptr, const int *col_idx, 
+                  const FloatType *values, const FloatType *x, FloatType *y) {
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < m; i++) {
+        FloatType sum = 0.0f;
+        for (int j = row_ptr[i]; j < row_ptr[i + 1]; j++) {
+            sum += values[j] * x[col_idx[j]];
+        }
+        y[i] = sum;
     }
 }
 
-void generateRandomVector(FloatType *d_vector, int size, unsigned int seed) {
-    int blockSize = 256;
-    int gridSize = (size + blockSize - 1) / blockSize;
-    fillRandomVector<<<gridSize, blockSize>>>(d_vector, size, seed);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
-}
+// Validate GPU result against CPU baseline
+bool validateResult(int m, const FloatType *gpu_result, const FloatType *cpu_result, double tolerance = 1e-4) {
+    bool valid = true;
+    int errors = 0;
+    const int max_errors_to_print = 5;
 
-// Print matrix statistics
-void printMatrixStats(const COOMatrix& coo) {
-    double sparsity = 100.0 * (1.0 - (double)coo.nnz / (coo.m * coo.n));
-    size_t memory_coo = coo.nnz * (2 * sizeof(int) + sizeof(FloatType));
-    
-    printf("Matrix Statistics:\n");
-    printf("  Dimensions: %d x %d\n", coo.m, coo.n);
-    printf("  Non-zeros: %d\n", coo.nnz);
-    printf("  Sparsity: %.2f%%\n", sparsity);
-    printf("  Avg NNZ per row: %.2f\n", (double)coo.nnz / coo.m);
-    printf("  Memory (COO format): %.2f KB\n", memory_coo / 1024.0);
-}
+    for (int i = 0; i < m; i++) {
+        double diff = fabs((double)gpu_result[i] - (double)cpu_result[i]);
+        double relative_error = (cpu_result[i] != 0.0) ? diff / fabs((double)cpu_result[i]) : diff;
+        
+        if (relative_error > tolerance && diff > 1e-8) {
+            if (errors < max_errors_to_print) {
+                printf("Mismatch at row %d: GPU=%.6e, CPU=%.6e, rel_error=%.6e\n", 
+                       i, gpu_result[i], cpu_result[i], relative_error);
+            }
+            valid = false;
+            errors++;
+        }
+    }
 
-// Free CSR matrix
-void freeCSRMatrix(CSRMatrix& csr) {
-    if (csr.d_row_ptr) CUDA_CHECK(cudaFree(csr.d_row_ptr));
-    if (csr.d_col_idx) CUDA_CHECK(cudaFree(csr.d_col_idx));
-    if (csr.d_values) CUDA_CHECK(cudaFree(csr.d_values));
-    if (csr.h_row_ptr) delete[] csr.h_row_ptr;
-    if (csr.h_col_idx) delete[] csr.h_col_idx;
-    if (csr.h_values) delete[] csr.h_values;
-}
-
-// Free ELL matrix
-void freeELLMatrix(ELLMatrix& ell) {
-    if (ell.d_col_idx) CUDA_CHECK(cudaFree(ell.d_col_idx));
-    if (ell.d_values) CUDA_CHECK(cudaFree(ell.d_values));
-    if (ell.h_col_idx) delete[] ell.h_col_idx;
-    if (ell.h_values) delete[] ell.h_values;
-}
-
-// Free JDS matrix
-void freeJDSMatrix(JDSMatrix& jds) {
-    if (jds.d_perm) CUDA_CHECK(cudaFree(jds.d_perm));
-    if (jds.d_iperm) CUDA_CHECK(cudaFree(jds.d_iperm));
-    if (jds.d_col_start) CUDA_CHECK(cudaFree(jds.d_col_start));
-    if (jds.d_diag_len) CUDA_CHECK(cudaFree(jds.d_diag_len));
-    if (jds.d_col_idx) CUDA_CHECK(cudaFree(jds.d_col_idx));
-    if (jds.d_values) CUDA_CHECK(cudaFree(jds.d_values));
-    if (jds.h_perm) delete[] jds.h_perm;
-    if (jds.h_iperm) delete[] jds.h_iperm;
-    if (jds.h_col_start) delete[] jds.h_col_start;
-    if (jds.h_diag_len) delete[] jds.h_diag_len;
-    if (jds.h_col_idx) delete[] jds.h_col_idx;
-    if (jds.h_values) delete[] jds.h_values;
+    if (!valid) {
+        printf("Validation FAILED: %d mismatches detected (showing first %d)\n", errors, max_errors_to_print);
+    } else {
+        printf("✓ Validation PASSED: Results match CPU baseline (tolerance: %.2e)\n", tolerance);
+    }
+    return valid;
 }

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <chrono>
 #include <vector>
+#include <cmath>
 
 #define BLOCK_SIZE 256
 #define SHARED_MEM_SIZE 1024
@@ -127,17 +128,18 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
+    printf("\n╔═══════════════════════════════════════════════════════════════╗\n");
     printf("║           ELL Format SpMV Benchmark                       ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
 
     // Read matrix
     printf("Loading matrix from: %s\n", mtx_file);
     COOMatrix coo = readMatrixMarket(mtx_file);
     printMatrixStats(coo);
 
-    // Convert to ELL
-    printf("\nConverting to ELL format...\n");
+    // Convert to ELL (with timing)
+    printf("\n═══════════════════════════════════════════════════════════════\n");
+    printf("Converting to ELL format...\n");
     ELLMatrix ell = cooToELL(coo);
     printf("Max row length (after padding): %d\n", ell.max_row_len);
     
@@ -153,13 +155,13 @@ int main(int argc, char *argv[]) {
     printf("Generating random vector (seed=42)...\n");
     generateRandomVector(d_x, coo.n, 42);
 
-    printf("\n═══════════════════════════════════════════════════════════\n");
+    printf("\n═══════════════════════════════════════════════════════════════\n");
     printf("ELL SpMV Benchmark Results\n");
     printf("Matrix: %d × %d, NNZ: %d\n", coo.m, coo.n, coo.nnz);
     printf("ELL Max row length: %d\n", ell.max_row_len);
     printf("Grid size: %d, Block size: %d\n", (coo.m + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE);
     printf("Warmup cycles: %d, Iterations: %d\n", warmup, iterations);
-    printf("═══════════════════════════════════════════════════════════\n\n");
+    printf("═══════════════════════════════════════════════════════════════\n\n");
 
     // Benchmark kernels
     std::vector<KernelStats> results;
@@ -179,9 +181,9 @@ int main(int argc, char *argv[]) {
     ));
 
     // Print results
-    printf("\n═══════════════════════════════════════════════════════════\n");
+    printf("\n═══════════════════════════════════════════════════════════════\n");
     printf("Benchmark Results Summary\n");
-    printf("═══════════════════════════════════════════════════════════\n\n");
+    printf("═══════════════════════════════════════════════════════════════\n\n");
 
     for (const auto &stat : results) {
         printf("%-25s: %8.4f ms | %10.2f GFLOP/s\n", stat.name, stat.avg_time_ms, stat.gflops);
@@ -199,11 +201,39 @@ int main(int argc, char *argv[]) {
 
     printf("\n✓ Best performing kernel: %s (%.2f GFLOP/s)\n\n", results[best_idx].name, best_gflops);
 
+    // ==================== CPU VALIDATION ====================
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("Validating against CPU baseline...\n");
+    printf("═══════════════════════════════════════════════════════════════\n\n");
+
+    // For ELL validation, we need to convert back to CSR for easy CPU comparison
+    // Or compute expected result directly from COO
+    std::vector<FloatType> h_x(coo.n);
+    CUDA_CHECK(cudaMemcpy(h_x.data(), d_x, coo.n * sizeof(FloatType), cudaMemcpyDeviceToHost));
+
+    // Compute reference from COO in CSR format
+    CSRMatrix csr_ref = cooToCSR(coo);
+    std::vector<FloatType> cpu_result(coo.m);
+    csrSpMV_CPU(coo.m, coo.n, csr_ref.row_ptr.data(), csr_ref.col_idx.data(), 
+                csr_ref.values.data(), h_x.data(), cpu_result.data());
+
+    // Copy GPU result
+    std::vector<FloatType> gpu_result(coo.m);
+    ellSpMV_Basic<<<(coo.m + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(
+        coo.m, ell.max_row_len, ell.d_col_idx, ell.d_values, d_x, d_y);
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemcpy(gpu_result.data(), d_y, coo.m * sizeof(FloatType), cudaMemcpyDeviceToHost));
+
+    // Validate
+    validateResult(coo.m, gpu_result.data(), cpu_result.data(), 1e-4);
+    
+    freeCSRMatrix(csr_ref);
+
     // Cleanup
     CUDA_CHECK(cudaFree(d_x));
     CUDA_CHECK(cudaFree(d_y));
     freeELLMatrix(ell);
 
-    printf("✓ ELL benchmark completed successfully!\n\n");
+    printf("\n✓ ELL benchmark completed successfully!\n\n");
     return 0;
 }
