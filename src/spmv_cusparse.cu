@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
 
     printf("\n╔═══════════════════════════════════════════════════════════╗\n");
     printf("║        cuSPARSE CSR Format SpMV Benchmark                 ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n");
+    printf("╚═══════════════════════════════════════════════════════════╝\n\n");
 
     // Read matrix
     printf("Loading matrix from: %s\n", mtx_file);
@@ -96,6 +96,9 @@ int main(int argc, char *argv[]) {
     // Convert to CSR
     printf("\nConverting to CSR format...\n");
     CSRMatrix csr = cooToCSR(coo);
+    
+    // CRITICAL FIX: Allocate and copy CSR data to GPU
+    allocateCSRMatrixGPU(csr);
 
     printf("CSR Device Pointers - RowPtr: %p, ColIdx: %p, Values: %p\n", 
        (void*)csr.d_row_ptr, (void*)csr.d_col_idx, (void*)csr.d_values);
@@ -113,7 +116,7 @@ int main(int argc, char *argv[]) {
     printf("cuSPARSE SpMV Setup\n");
     printf("Matrix: %d × %d, NNZ: %d\n", coo.m, coo.n, coo.nnz);
     printf("Warmup cycles: %d, Iterations: %d\n", warmup, iterations);
-    printf("════════════════════════════════════════════════════════════\n\n");
+    printf("════════════════════════════════════════════════════════════\n");
 
     // Setup cuSPARSE
     auto setup_start = std::chrono::high_resolution_clock::now();
@@ -146,11 +149,13 @@ int main(int argc, char *argv[]) {
     double setup_time = std::chrono::duration<double, std::milli>(setup_end - setup_start).count();
     printf("cuSPARSE setup time: %.4f ms\n", setup_time);
     
+    // Zero-initialize output vector before warmup
     CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
 
     // Warm-up
     printf("\nWarm-up phase...\n");
     for (int i = 0; i < warmup; i++) {
+        CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
         cusparseSpMV(sparse.handle, CUSPARSE_OPERATION_NON_TRANSPOSE,
                     &one, sparse.matA, sparse.vecX, &zero, sparse.vecY,
                     CUDA_R_32F, CUSPARSE_SPMV_ALG_DEFAULT, dBuffer);
@@ -162,6 +167,9 @@ int main(int argc, char *argv[]) {
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
+    
+    // Zero-initialize before timing
+    CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
@@ -184,13 +192,13 @@ int main(int argc, char *argv[]) {
     // Print results
     printf("\n════════════════════════════════════════════════════════════\n");
     printf("cuSPARSE SpMV Results\n");
-    printf("════════════════════════════════════════════════════════════\n\n");
+    printf("════════════════════════════════════════════════════════════\n");
     printf("%-25s: %8.4f ms | %10.2f GFLOP/s\n", "cuSPARSE SpMV", avg_time, gflops);
 
     // ==================== VALIDATION ====================
     printf("\n════════════════════════════════════════════════════════════\n");
     printf("Validation Against CPU Baseline (OpenMP)\n");
-    printf("════════════════════════════════════════════════════════════\n\n");
+    printf("════════════════════════════════════════════════════════════\n");
 
     // Allocate CPU vectors
     std::vector<FloatType> h_x(coo.n);
@@ -223,9 +231,9 @@ int main(int argc, char *argv[]) {
     bool valid = validateResult(h_y_gpu, h_y_cpu, coo.m, "cuSPARSE");
 
     if (valid) {
-        printf("\n✓ Validation PASSED: GPU results match CPU baseline\n\n");
+        printf("\n Validation PASSED: GPU results match CPU baseline\n\n");
     } else {
-        printf("\n✗ Validation FAILED: GPU results differ from CPU baseline\n\n");
+        printf("\n Validation FAILED: GPU results differ from CPU baseline\n\n");
     }
 
     printf("════════════════════════════════════════════════════════════\n");
@@ -236,6 +244,6 @@ int main(int argc, char *argv[]) {
     CUDA_CHECK(cudaFree(d_y));
     freeCSRMatrix(csr);
 
-    printf("✓ cuSPARSE benchmark completed successfully!\n\n");
+    printf(" cuSPARSE benchmark completed successfully!\n\n");
     return 0;
 }

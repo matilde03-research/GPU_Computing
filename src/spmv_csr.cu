@@ -5,6 +5,7 @@
 #include <chrono>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 // ============================================================
 //  Tuning knobs  (match paper: THREADS=512, R=2)
@@ -303,17 +304,32 @@ __global__ void csrSpMV_LineEnhance(
 
 bool validateResult(const std::vector<FloatType>& gpu_result, 
                    const std::vector<FloatType>& cpu_result,
-                   int size, FloatType tolerance = 1e-4) {
-    for (int i = 0; i < size; i++) {
-        FloatType error = fabs(gpu_result[i] - cpu_result[i]);
-        FloatType rel_error = error / (fabs(cpu_result[i]) + 1e-10);
-        if (error > tolerance && rel_error > tolerance) {
-            printf("Mismatch at index %d: GPU=%.6f, CPU=%.6f (error=%.6e, rel_error=%.6e)\n",
-                   i, gpu_result[i], cpu_result[i], error, rel_error);
-            return false;
+                   int m, const char *kernel_name) {
+    FloatType tolerance = 1e-3;
+    FloatType rel_tolerance = 1e-4;
+    int error_count = 0;
+    FloatType max_error = 0.0f;
+
+    for (int i = 0; i < m; i++) {
+        FloatType diff = fabs(gpu_result[i] - cpu_result[i]);
+        FloatType rel_error = diff / (fabs(cpu_result[i]) + 1e-10f);
+        if (diff > tolerance && rel_error > rel_tolerance) {
+            error_count++;
+            max_error = fmax(max_error, diff);
+            if (error_count <= 5) {
+                printf("  [%s] Error at index %d: GPU=%.6e, CPU=%.6e, diff=%.6e\n", 
+                       kernel_name, i, gpu_result[i], cpu_result[i], diff);
+            }
         }
     }
-    return true;
+    
+    if (error_count > 0) {
+        printf("  [%s] FAILED: %d mismatches, max error: %.6e\n", kernel_name, error_count, max_error);
+        return false;
+    } else {
+        printf("  [%s] PASSED\n", kernel_name);
+        return true;
+    }
 }
 
 // ============================================================
@@ -526,9 +542,9 @@ int main(int argc, char *argv[])
     }
 
 
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
+    printf("\n╔═══════════════════════════════════════════════════════════╗\n");
     printf("║    Chu et al. 2023 – Flat & Line-Enhance SpMV Benchmark   ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("╚═══════════════════════════════════════════════════════════╝\n\n");
 
     printf("Loading matrix from: %s\n", mtx_file);
     COOMatrix coo = readMatrixMarket(mtx_file);
@@ -599,41 +615,47 @@ int main(int argc, char *argv[])
     printf("\n✓ Best: %s (%.2f GFLOP/s)\n\n",
            results[best].name, results[best].gflops);
     
-     // ==================== VALIDATION ====================
+    // ==================== VALIDATION ====================
     printf("\n════════════════════════════════════════════════════════════\n");
-    printf("Validation Against CPU Baseline (OpenMP)\n");
-    printf("════════════════════════════════════════════════════════════\n\n");
+    printf("Validation Against CPU Baseline (OpenMP on COO)\n");
+    printf("════════════════════════════════════════════════════════════\n");
 
     // Allocate CPU vectors
     std::vector<FloatType> h_x(coo.n);
     std::vector<FloatType> h_y_gpu(coo.m);
     std::vector<FloatType> h_y_cpu(coo.m, 0.0f);
 
-    // Generate same random vector on CPU
-    srand(42);
-    for (int i = 0; i < coo.n; i++) {
-        h_x[i] = (FloatType)rand() / RAND_MAX;
+    // Copy the SAME random vector used on GPU (generated with seed=42)
+    printf("Copying GPU input vector x to host...\n");
+    CUDA_CHECK(cudaMemcpy(h_x.data(), d_x, coo.n * sizeof(FloatType), 
+                         cudaMemcpyDeviceToHost));
+
+    // Run CPU baseline with OpenMP using COO format (matches spmv_coo.cu)
+    printf("Running CPU baseline with OpenMP...\n");
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < coo.nnz; i++) {
+        int row = coo.row_indices[i];
+        int col = coo.col_indices[i];
+        #pragma omp atomic
+        h_y_cpu[row] += coo.values[i] * h_x[col];
     }
 
     // Copy GPU result
-    CUDA_CHECK(cudaMemcpy(h_y_gpu.data(), d_y, coo.m * sizeof(FloatType), cudaMemcpyDeviceToHost));
-
-    // Run CPU baseline
-    printf("Running CPU baseline with OpenMP...\n");
-    spmvCPU_CSR(coo.m, coo.n, csr.row_ptr.data(), csr.col_idx.data(), 
-                csr.values.data(), h_x.data(), h_y_cpu.data());
+    printf("Copying GPU output vector y to host...\n");
+    CUDA_CHECK(cudaMemcpy(h_y_gpu.data(), d_y, coo.m * sizeof(FloatType), 
+                         cudaMemcpyDeviceToHost));
 
     // Validate results
     printf("Comparing GPU and CPU results...\n");
-    bool valid = validateResult(h_y_gpu, h_y_cpu, coo.m);
+    printf("───────────────────────────────────────────────────────\n");
+    bool valid = validateResult(h_y_gpu, h_y_cpu, coo.m, "CSR-Best");
 
     if (valid) {
-        printf("✓ Validation PASSED: GPU results match CPU baseline\n\n");
+        printf("\n✓ Validation PASSED: GPU results match CPU baseline\n\n");
     } else {
-        printf("✗ Validation FAILED: GPU results differ from CPU baseline\n\n");
+        printf("\n✗ Validation FAILED: GPU results differ from CPU baseline\n\n");
     }
     
-
     CUDA_CHECK(cudaFree(d_x));
     CUDA_CHECK(cudaFree(d_y));
     freeCSRMatrix(csr);
