@@ -75,9 +75,13 @@ The line is like that:
 the first argument is the type of kernels you want to launch, the second is the MatrixMarket file, the third the warmup cycles and the fourth the number of iterations
 
 **Important! If you want to test all the implement kernels for a matrices you'll need to submit 4 different jobs and change the first parameter of the last line of the sbatch file every time like that:**
+
 ./bin/spmv_coo ./data/Rucci1.mtx 4 100
+
 ./bin/spmv_csr ./data/Rucci1.mtx 4 100
+
 ./bin/spmv_ell ./data/Rucci1.mtx 4 100
+
 ./bin/spmv_cusparse ./data/Rucci1.mtx 4 100
 
 After that you'll have 4 output file to inspect in the "output" directory that will be created
