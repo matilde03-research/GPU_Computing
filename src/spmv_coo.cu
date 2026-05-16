@@ -204,7 +204,7 @@ KernelStats timeKernel_Standard(int m, int nnz,
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
     
-    float time_ms = 0;
+    float time_ms = 0; //check comment
     CUDA_CHECK(cudaEventElapsedTime(&time_ms, start, stop));
     
     double avg_time = time_ms / iterations;
