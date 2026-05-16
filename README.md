@@ -59,6 +59,9 @@ GPU_Computing/
 ### Compilation
 
 ```bash
+# Just the first time
+module load CUDA/11.8.0
+
 # Build all executables
 make
 
