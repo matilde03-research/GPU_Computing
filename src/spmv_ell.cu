@@ -152,7 +152,9 @@ void ellSpMV_Coalesced(
 struct KernelStats
 {
     const char* name;
-    double avg_time_ms;
+    double conversion_time_ms;   // COO->ELL conversion time
+    double computation_time_ms;  // Just the kernel execution
+    double total_time_ms;        // Total time (conversion + computation)
     double gflops;
 };
 
@@ -171,6 +173,7 @@ KernelStats timeKernel(
         const FloatType *d_values,
         const FloatType *d_x,
         FloatType *d_y,
+        double conversion_time_ms,
         int warmup,
         int iterations,
         const char *name)
@@ -238,7 +241,9 @@ KernelStats timeKernel(
 
     KernelStats result;
     result.name = name;
-    result.avg_time_ms = ms;
+    result.conversion_time_ms = conversion_time_ms;
+    result.computation_time_ms = ms;
+    result.total_time_ms = conversion_time_ms + ms;
     result.gflops = gflops;
 
     return result;
@@ -281,16 +286,31 @@ int main(int argc, char* argv[])
     COOMatrix coo = readMatrixMarket(mtx_file);
 
     ////////////////////////////////////////////
-    // Convert
+    // Convert and time
     ////////////////////////////////////////////
 
     printf("\nConverting COO -> ELL...\n");
+    
+    cudaEvent_t conv_start, conv_stop;
+    CUDA_CHECK(cudaEventCreate(&conv_start));
+    CUDA_CHECK(cudaEventCreate(&conv_stop));
+    CUDA_CHECK(cudaEventRecord(conv_start));
+
     ELLMatrix ell = cooToELL(coo);
 
+    CUDA_CHECK(cudaEventRecord(conv_stop));
+    CUDA_CHECK(cudaEventSynchronize(conv_stop));
+    
+    float conversion_ms = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&conversion_ms, conv_start, conv_stop));
+    CUDA_CHECK(cudaEventDestroy(conv_start));
+    CUDA_CHECK(cudaEventDestroy(conv_stop));
+
     printf("Max row length: %d\n", ell.max_row_len);
+    printf("Format conversion time (COO->ELL): %.4f ms\n", conversion_ms);
 
     double memory_ell = (long long)coo.m * ell.max_row_len * 
-                        (sizeof(int) + sizeof(FloatType)) / 1024.0 / 1024.0;
+                         (sizeof(int) + sizeof(FloatType)) / 1024.0 / 1024.0;
     printf("ELL Memory: %.2f MB\n", memory_ell);
 
     ////////////////////////////////////////////
@@ -353,6 +373,7 @@ int main(int argc, char* argv[])
             ell.d_values,
             d_x,
             d_y,
+            conversion_ms,
             warmup,
             iterations,
             "ELL-Basic"
@@ -370,6 +391,7 @@ int main(int argc, char* argv[])
             ell.d_values,
             d_x,
             d_y,
+            conversion_ms,
             warmup,
             iterations,
             "ELL-Coalesced"
@@ -381,13 +403,16 @@ int main(int argc, char* argv[])
     ////////////////////////////////////////////
 
     printf("\n════════════════════════════════════════════════════════\n");
-    printf("Performance Results\n");
+    printf("Performance Results – Detailed Breakdown\n");
     printf("════════════════════════════════════════════════════════\n\n");
 
     for(auto& r : results)
     {
-        printf("%-20s : %8.4f ms | %10.2f GFLOP/s\n",
-               r.name, r.avg_time_ms, r.gflops);
+        printf("%-20s:\n", r.name);
+        printf("  Format conversion: %8.4f ms\n", r.conversion_time_ms);
+        printf("  Computation:       %8.4f ms\n", r.computation_time_ms);
+        printf("  Total:             %8.4f ms | %10.2f GFLOP/s\n\n",
+               r.total_time_ms, r.gflops);
     }
 
     ////////////////////////////////////////////
@@ -403,7 +428,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    printf("\nBest kernel: %s (%.2f GFLOP/s)\n",
+    printf("Best kernel: %s (%.2f GFLOP/s)\n",
            results[best].name, results[best].gflops);
 
     double speedup = results[best].gflops / results[0].gflops;
@@ -457,9 +482,9 @@ int main(int argc, char* argv[])
     bool valid = validateResult(h_y_gpu, h_y_cpu, coo.m, "ELL-Basic");
 
     if (valid) {
-        printf("\n✓ Validation PASSED: GPU results match CPU baseline\n\n");
+        printf("\n Validation PASSED: GPU results match CPU baseline\n\n");
     } else {
-        printf("\n✗ Validation FAILED: GPU results differ from CPU baseline\n\n");
+        printf("\n Validation FAILED: GPU results differ from CPU baseline\n\n");
     }
 
     ////////////////////////////////////////////
@@ -471,7 +496,7 @@ int main(int argc, char* argv[])
     freeELLMatrix(ell);
 
     printf("════════════════════════════════════════════════════════\n");
-    printf("✓ Benchmark completed successfully!\n\n");
+    printf(" Benchmark completed successfully!\n\n");
 
     return 0;
 }
