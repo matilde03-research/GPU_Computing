@@ -337,7 +337,10 @@ bool validateResult(const std::vector<FloatType>& gpu_result,
 // ============================================================
 struct KernelStats {
     const char *name;
-    double avg_time_ms;
+    double conversion_time_ms;   // COO->CSR conversion time
+    double preprocessing_time_ms; // Preprocessing time (for Flat only)
+    double computation_time_ms;  // Just the kernel execution
+    double total_time_ms;        // Total time (conversion + preprocessing + computation)
     double gflops;
 };
 
@@ -346,6 +349,7 @@ KernelStats timeKernel_Vector(
         int m, int nnz,
         const int *d_row_ptr, const int *d_col_idx,
         const FloatType *d_values, const FloatType *d_x, FloatType *d_y,
+        double conversion_time_ms,
         int warmup, int iterations)
 {
     // One warp per row → total warps = m, threads = m * WARP_SIZE
@@ -386,7 +390,10 @@ KernelStats timeKernel_Vector(
 
     KernelStats s;
     s.name        = "CSR-Vector (warp-per-row)";
-    s.avg_time_ms = avg_ms;
+    s.conversion_time_ms = conversion_time_ms;
+    s.preprocessing_time_ms = 0.0;
+    s.computation_time_ms = avg_ms;
+    s.total_time_ms = conversion_time_ms + avg_ms;
     s.gflops      = gflops;
     return s;
 }
@@ -396,6 +403,7 @@ KernelStats timeKernel_Flat(
         int m, int nnz,
         const int *d_row_ptr, const int *d_col_idx,
         const FloatType *d_values, const FloatType *d_x, FloatType *d_y,
+        double conversion_time_ms,
         int warmup, int iterations)
 {
     // --- Preprocessing ---
@@ -404,11 +412,24 @@ KernelStats timeKernel_Flat(
     CUDA_CHECK(cudaMalloc(&d_bp, (WGS + 1) * sizeof(int)));
     CUDA_CHECK(cudaMemset(d_bp, 0, (WGS + 1) * sizeof(int)));
 
+    // Time preprocessing
+    cudaEvent_t pre_start, pre_stop;
+    CUDA_CHECK(cudaEventCreate(&pre_start));
+    CUDA_CHECK(cudaEventCreate(&pre_stop));
+    CUDA_CHECK(cudaEventRecord(pre_start));
+
     // Launch preprocessing kernel
     int pre_threads = BLOCK_SIZE;
     int pre_blocks  = (m + pre_threads - 1) / pre_threads;
     flat_preprocess<<<pre_blocks, pre_threads>>>(m, nnz, d_row_ptr, d_bp, WGS, STRIDE_FLAT);
     CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaEventRecord(pre_stop));
+    CUDA_CHECK(cudaEventSynchronize(pre_stop));
+    float pre_ms = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&pre_ms, pre_start, pre_stop));
+    CUDA_CHECK(cudaEventDestroy(pre_start));
+    CUDA_CHECK(cudaEventDestroy(pre_stop));
 
     // Warm-up
     for (int i = 0; i < warmup; i++) {
@@ -446,7 +467,10 @@ KernelStats timeKernel_Flat(
 
     KernelStats s;
     s.name       = "Flat (Chu 2023)";
-    s.avg_time_ms = avg_ms;
+    s.conversion_time_ms = conversion_time_ms;
+    s.preprocessing_time_ms = pre_ms;
+    s.computation_time_ms = avg_ms;
+    s.total_time_ms = conversion_time_ms + pre_ms + avg_ms;
     s.gflops      = gflops;
     return s;
 }
@@ -457,6 +481,7 @@ KernelStats timeKernel_LineEnhance(
         int m, int nnz,
         const int *d_row_ptr, const int *d_col_idx,
         const FloatType *d_values, const FloatType *d_x, FloatType *d_y,
+        double conversion_time_ms,
         int warmup, int iterations)
 {
     double avg_nnz = (double)nnz / m;
@@ -517,7 +542,10 @@ KernelStats timeKernel_LineEnhance(
 
     KernelStats s;
     s.name        = "Line-Enhance (Chu 2023)";
-    s.avg_time_ms = avg_ms;
+    s.conversion_time_ms = conversion_time_ms;
+    s.preprocessing_time_ms = 0.0;
+    s.computation_time_ms = avg_ms;
+    s.total_time_ms = conversion_time_ms + avg_ms;
     s.gflops      = gflops;
     return s;
 }
@@ -544,15 +572,31 @@ int main(int argc, char *argv[])
 
     printf("\n╔═══════════════════════════════════════════════════════════╗\n");
     printf("║    Chu et al. 2023 – Flat & Line-Enhance SpMV Benchmark   ║\n");
-    printf("╚═══════════════════════════════════════════════════════════╝\n\n");
+    printf("╚═══════════════════════════════════════════════════════════╝\n");
 
     printf("Loading matrix from: %s\n", mtx_file);
     COOMatrix coo = readMatrixMarket(mtx_file);
     
-
+    // ========== TIME COO->CSR CONVERSION ==========
     printf("\nConverting to CSR format...\n");
+    
+    cudaEvent_t conv_start, conv_stop;
+    CUDA_CHECK(cudaEventCreate(&conv_start));
+    CUDA_CHECK(cudaEventCreate(&conv_stop));
+    CUDA_CHECK(cudaEventRecord(conv_start));
+
     CSRMatrix csr = cooToCSR(coo);
     allocateCSRMatrixGPU(csr);
+
+    CUDA_CHECK(cudaEventRecord(conv_stop));
+    CUDA_CHECK(cudaEventSynchronize(conv_stop));
+    
+    float conversion_ms = 0;
+    CUDA_CHECK(cudaEventElapsedTime(&conversion_ms, conv_start, conv_stop));
+    CUDA_CHECK(cudaEventDestroy(conv_start));
+    CUDA_CHECK(cudaEventDestroy(conv_stop));
+
+    printf("Format conversion time (COO->CSR): %.4f ms\n", conversion_ms);
 
     // Row-length statistics
     std::vector<int> h_row_ptr(coo.m + 1);
@@ -587,38 +631,47 @@ int main(int argc, char *argv[])
     results.push_back(timeKernel_Vector(
         coo.m, coo.nnz,
         csr.d_row_ptr, csr.d_col_idx, csr.d_values, d_x, d_y,
+        conversion_ms,
         warmup, iterations));
 
     printf("Benchmarking Flat kernel...\n");
     results.push_back(timeKernel_Flat(
         coo.m, coo.nnz,
         csr.d_row_ptr, csr.d_col_idx, csr.d_values, d_x, d_y,
+        conversion_ms,
         warmup, iterations));
 
     printf("Benchmarking Line-Enhance kernel...\n");
     results.push_back(timeKernel_LineEnhance(
         coo.m, coo.nnz,
         csr.d_row_ptr, csr.d_col_idx, csr.d_values, d_x, d_y,
+        conversion_ms,
         warmup, iterations));
 
     // Results
     printf("\n═══════════════════════════════════════════════════════════\n");
-    printf("Benchmark Results\n");
+    printf("Benchmark Results – Detailed Breakdown\n");
     printf("═══════════════════════════════════════════════════════════\n\n");
-    for (const auto &s : results)
-        printf("%-30s: %8.4f ms | %10.2f GFLOP/s\n",
-               s.name, s.avg_time_ms, s.gflops);
+
+    for (const auto &s : results) {
+        printf("%-30s:\n", s.name);
+        printf("  Format conversion:  %8.4f ms\n", s.conversion_time_ms);
+        printf("  Preprocessing:      %8.4f ms\n", s.preprocessing_time_ms);
+        printf("  Computation:        %8.4f ms\n", s.computation_time_ms);
+        printf("  Total:              %8.4f ms | %10.2f GFLOP/s\n\n",
+               s.total_time_ms, s.gflops);
+    }
 
     int best = 0;
     for (int i = 1; i < (int)results.size(); i++)
         if (results[i].gflops > results[best].gflops) best = i;
-    printf("\n✓ Best: %s (%.2f GFLOP/s)\n\n",
+    printf("\n✓ Best (by computation): %s (%.2f GFLOP/s)\n\n",
            results[best].name, results[best].gflops);
     
     // ==================== VALIDATION ====================
     printf("\n════════════════════════════════════════════════════════════\n");
     printf("Validation Against CPU Baseline (OpenMP on COO)\n");
-    printf("════════════════════════════════════════════════════════════\n");
+    printf("════════════════════════════════════════════════════════════\n\n");
 
     // Allocate CPU vectors
     std::vector<FloatType> h_x(coo.n);
