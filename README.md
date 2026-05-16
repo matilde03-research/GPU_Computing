@@ -43,7 +43,8 @@ GPU_Computing/
 ├── ASIC_680ks.mtx   //File to ignore, just for fast checking
 ├── Makefile
 ├── README.md
-└── batch_script.sh
+├── batch_script.sh //To run the programs in a job in the assigned environment
+└── download.sh
 ```
 
 ## Building
@@ -64,7 +65,7 @@ make
 # Run experiments
 sbatch batch_script.sh
 ```
-The batch_script.sh file is the one used during class labs and it will generate and output and an error file in a directory called "output"
+The batch_script.sh file is the one used during class labs and it will generate an output and an error file in a directory called "output" for each job launched
 
 Important! Before executing the sbatch command is important to check for the last line of the file that is what actually launches the job in the cluster
 The line is like that:
@@ -72,5 +73,13 @@ The line is like that:
 ./bin/spmv_ell ./data/Rucci1.mtx 4 100 
 
 the first argument is the type of kernels you want to launch, the second is the MatrixMarket file, the third the warmup cycles and the fourth the number of iterations
+
+**Important! If you want to test all the implement kernels for a matrices you'll need to submit 4 different jobs and change the first parameter of the last line of the sbatch file every time like that:**
+./bin/spmv_coo ./data/Rucci1.mtx 4 100
+./bin/spmv_csr ./data/Rucci1.mtx 4 100
+./bin/spmv_ell ./data/Rucci1.mtx 4 100
+./bin/spmv_cusparse ./data/Rucci1.mtx 4 100
+
+After that you'll have 4 output file to inspect in the "output" directory that will be created
 
 To download the matrices you can use the download.sh file. It will download the matrices in a directory called "data"
