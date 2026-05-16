@@ -1,209 +1,480 @@
 #include "../include/mtx_parser.h"
+
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <iostream>
-#include <chrono>
 #include <vector>
+#include <chrono>
 
 #define BLOCK_SIZE 256
-#define SHARED_MEM_SIZE 1024
+#define X_TILE_SIZE BLOCK_SIZE
 
-// ==================== ELL KERNELS ====================
+//============================================================
+// KERNEL 1 : Basic ELL
+// One thread computes one row
+//============================================================
 
-// Kernel 1: ELL-Basic (straightforward parallelization - one thread per row)
-__global__ void ellSpMV_Basic(int m, int max_row_len, const int *col_idx, 
-                               const FloatType *values, const FloatType *x, FloatType *y) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < m) {
-        FloatType sum = 0.0f;
-        for (int j = 0; j < max_row_len; j++) {
-            int col_id = col_idx[j * m + row];  // Column-major access
-            if (col_id >= 0) {  // -1 indicates padding
-                sum += values[j * m + row] * x[col_id];
-            }
+__global__
+void ellSpMV_Basic(
+    int m,
+    int max_row_len,
+    const int* __restrict__ col_idx,
+    const FloatType* __restrict__ values,
+    const FloatType* __restrict__ x,
+    FloatType* y)
+{
+    int row =
+        blockIdx.x * blockDim.x +
+        threadIdx.x;
+
+    if(row >= m)
+        return;
+
+    FloatType sum = 0;
+
+    for(int j=0;j<max_row_len;j++)
+    {
+        int idx = j*m + row;
+
+        int col = col_idx[idx];
+
+        if(col != -1)
+        {
+            sum +=
+                values[idx] *
+                __ldg(&x[col]);
         }
-        y[row] = sum;
     }
+
+    y[row] = sum;
 }
 
-// Kernel 2: ELL-Optimized (shared memory + improved load balancing)
-// Uses shared memory to cache column indices and better memory access patterns
-__global__ void ellSpMV_Optimized(int m, int max_row_len, const int *col_idx, 
-                                   const FloatType *values, const FloatType *x, FloatType *y) {
-    int row = blockIdx.x * blockDim.x + threadIdx.x;
-    int tx = threadIdx.x;
-    
-    // Shared memory for caching data
-    __shared__ FloatType s_values[SHARED_MEM_SIZE / sizeof(FloatType)];
-    __shared__ int s_col_idx[SHARED_MEM_SIZE / sizeof(int)];
-    
-    if (row < m) {
-        FloatType sum = 0.0f;
-        
-        // Process in chunks to utilize shared memory
-        for (int chunk = 0; chunk < max_row_len; chunk += blockDim.x) {
-            if (chunk + tx < max_row_len) {
-                int idx = (chunk + tx) * m + row;
-                s_col_idx[tx] = col_idx[idx];
-                s_values[tx] = values[idx];
-            }
-            __syncthreads();
-            
-            // Compute with cached data
-            if (chunk + tx < max_row_len) {
-                int col_id = s_col_idx[tx];
-                if (col_id >= 0) {
-                    sum += s_values[tx] * x[col_id];
-                }
-            }
-            __syncthreads();
+
+//============================================================
+// KERNEL 2 : Shared-memory version
+//
+// Cache x vector tiles in shared memory
+//============================================================
+
+__global__
+void ellSpMV_Shmem(
+    int m,
+    int max_row_len,
+    const int* __restrict__ col_idx,
+    const FloatType* __restrict__ values,
+    const FloatType* __restrict__ x,
+    FloatType* y)
+{
+    int row =
+        blockIdx.x*blockDim.x +
+        threadIdx.x;
+
+    int tx=threadIdx.x;
+
+    if(row>=m)
+        return;
+
+    FloatType sum=0;
+
+    __shared__
+    FloatType sx[X_TILE_SIZE];
+
+    //////////////////////////////////////////////////////
+    // Tile through x vector
+    //////////////////////////////////////////////////////
+
+    for(int tile=0;
+        tile<m;
+        tile+=X_TILE_SIZE)
+    {
+        if(tile+tx<m)
+        {
+            sx[tx] =
+                __ldg(&x[tile+tx]);
         }
-        
-        y[row] = sum;
+
+        __syncthreads();
+
+        for(int j=0;
+            j<max_row_len;
+            j++)
+        {
+            int idx =
+                j*m+row;
+
+            int col=
+                col_idx[idx];
+
+            if(col==-1)
+                continue;
+
+            FloatType val=
+                values[idx];
+
+            if(col>=tile &&
+               col<tile+X_TILE_SIZE)
+            {
+                sum +=
+                    val*
+                    sx[col-tile];
+            }
+            else
+            {
+                sum +=
+                    val*
+                    __ldg(&x[col]);
+            }
+        }
+
+        __syncthreads();
     }
+
+    y[row]=sum;
 }
 
-// ==================== TIMING UTILITIES ====================
 
-struct KernelStats {
-    const char *name;
+//============================================================
+// BENCHMARK STRUCT
+//============================================================
+
+struct KernelStats
+{
+    const char* name;
+
     double avg_time_ms;
+
     double gflops;
 };
 
-KernelStats timeKernel(void (*kernel)(int, int, const int*, const FloatType*, const FloatType*, FloatType*),
-                       int m, int nnz, int max_row_len,
-                       const int *d_col_idx, const FloatType *d_values,
-                       const FloatType *d_x, FloatType *d_y,
-                       int warmup, int iterations, const char *name) {
-    // Warm-up
-    for (int i = 0; i < warmup; i++) {
-        kernel<<<(m + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(m, max_row_len, d_col_idx, d_values, d_x, d_y);
+
+//============================================================
+// BENCHMARK TEMPLATE
+//============================================================
+
+template<typename Kernel>
+KernelStats timeKernel(
+        Kernel kernel,
+        int m,
+        int nnz,
+        int max_row_len,
+        const int *d_col_idx,
+        const FloatType *d_values,
+        const FloatType *d_x,
+        FloatType *d_y,
+        int warmup,
+        int iterations,
+        const char *name)
+{
+    int grid =
+        (m+BLOCK_SIZE-1)
+        /BLOCK_SIZE;
+
+    ////////////////////////////////////////////
+    // Warmup
+    ////////////////////////////////////////////
+
+    for(int i=0;i<warmup;i++)
+    {
+        kernel<<<grid,BLOCK_SIZE>>>(
+            m,
+            max_row_len,
+            d_col_idx,
+            d_values,
+            d_x,
+            d_y
+        );
     }
-    CUDA_CHECK(cudaDeviceSynchronize());
-    
+
+    CUDA_CHECK(
+        cudaDeviceSynchronize()
+    );
+
+    ////////////////////////////////////////////
     // Timing
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    
-    CUDA_CHECK(cudaEventRecord(start));
-    for (int i = 0; i < iterations; i++) {
-        kernel<<<(m + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE>>>(m, max_row_len, d_col_idx, d_values, d_x, d_y);
+    ////////////////////////////////////////////
+
+    cudaEvent_t start,stop;
+
+    CUDA_CHECK(
+        cudaEventCreate(&start)
+    );
+
+    CUDA_CHECK(
+        cudaEventCreate(&stop)
+    );
+
+    CUDA_CHECK(
+        cudaEventRecord(start)
+    );
+
+    for(int i=0;i<iterations;i++)
+    {
+        kernel<<<grid,BLOCK_SIZE>>>(
+            m,
+            max_row_len,
+            d_col_idx,
+            d_values,
+            d_x,
+            d_y
+        );
     }
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-    
-    float time_ms = 0;
-    CUDA_CHECK(cudaEventElapsedTime(&time_ms, start, stop));
-    
-    double avg_time = time_ms / iterations;
-    double gflops = (2.0 * nnz) / (avg_time * 1e-3) / 1e9;
-    
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-    
-    KernelStats stats;
-    stats.name = name;
-    stats.avg_time_ms = avg_time;
-    stats.gflops = gflops;
-    return stats;
+
+    CUDA_CHECK(
+        cudaEventRecord(stop)
+    );
+
+    CUDA_CHECK(
+        cudaEventSynchronize(stop)
+    );
+
+    float ms=0;
+
+    CUDA_CHECK(
+        cudaEventElapsedTime(
+            &ms,
+            start,
+            stop
+        )
+    );
+
+    ms/=iterations;
+
+    double gflops =
+        (2.0*nnz)
+        /(ms*1e6);
+
+    CUDA_CHECK(
+        cudaEventDestroy(start)
+    );
+
+    CUDA_CHECK(
+        cudaEventDestroy(stop)
+    );
+
+    KernelStats result;
+
+    result.name=name;
+    result.avg_time_ms=ms;
+    result.gflops=gflops;
+
+    return result;
 }
 
-// ==================== MAIN ====================
 
-int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <matrix.mtx> <warmup_cycles> <iterations>\n", argv[0]);
+
+//============================================================
+// MAIN
+//============================================================
+
+int main(int argc,char* argv[])
+{
+    if(argc!=4)
+    {
+        fprintf(
+            stderr,
+            "Usage: %s <matrix.mtx> <warmup> <iterations>\n",
+            argv[0]);
+
         return 1;
     }
 
-    const char *mtx_file = argv[1];
-    int warmup = atoi(argv[2]);
-    int iterations = atoi(argv[3]);
+    const char* mtx_file=
+        argv[1];
 
-    if (warmup <= 0 || iterations <= 0) {
-        fprintf(stderr, "Error: warmup and iterations must be positive\n");
+    int warmup=
+        atoi(argv[2]);
+
+    int iterations=
+        atoi(argv[3]);
+
+    if(warmup<=0 ||
+       iterations<=0)
+    {
+        fprintf(
+            stderr,
+            "Error: arguments must be positive\n");
+
         return 1;
     }
 
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
-    printf("║           ELL Format SpMV Benchmark                       ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("\n");
+    printf("====================================================\n");
+    printf("            ELL SpMV Benchmark\n");
+    printf("====================================================\n");
 
-    // Read matrix
-    printf("Loading matrix from: %s\n", mtx_file);
-    COOMatrix coo = readMatrixMarket(mtx_file);
-    
 
-    // Convert to ELL
-    printf("\nConverting to ELL format...\n");
-    ELLMatrix ell = cooToELL(coo);
-    printf("Max row length (after padding): %d\n", ell.max_row_len);
-    
-    double memory_ell = (long long)coo.m * ell.max_row_len * (sizeof(int) + sizeof(FloatType)) / 1024.0;
-    printf("Memory (ELL format): %.2f KB\n", memory_ell);
+    ////////////////////////////////////////////
+    // Load matrix
+    ////////////////////////////////////////////
 
-    // Allocate vectors on device
-    FloatType *d_x, *d_y;
-    CUDA_CHECK(cudaMalloc(&d_x, coo.n * sizeof(FloatType)));
-    CUDA_CHECK(cudaMalloc(&d_y, coo.m * sizeof(FloatType)));
+    printf(
+        "\nLoading: %s\n",
+        mtx_file);
 
-    // Generate random vector
-    printf("Generating random vector (seed=42)...\n");
-    generateRandomVector(d_x, coo.n, 42);
+    COOMatrix coo =
+        readMatrixMarket(
+            mtx_file);
 
-    printf("\n═══════════════════════════════════════════════════════════\n");
-    printf("ELL SpMV Benchmark Results\n");
-    printf("Matrix: %d × %d, NNZ: %d\n", coo.m, coo.n, coo.nnz);
-    printf("ELL Max row length: %d\n", ell.max_row_len);
-    printf("Grid size: %d, Block size: %d\n", (coo.m + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE);
-    printf("Warmup cycles: %d, Iterations: %d\n", warmup, iterations);
-    printf("═══════════════════════════════════════════════════════════\n\n");
+    ////////////////////////////////////////////
+    // Convert
+    ////////////////////////////////////////////
 
-    // Benchmark kernels
-    std::vector<KernelStats> results;
-    
-    printf("Benchmarking Kernel 1: ELL-Basic...\n");
-    results.push_back(timeKernel(
-        ellSpMV_Basic, coo.m, coo.nnz, ell.max_row_len,
-        ell.d_col_idx, ell.d_values, d_x, d_y,
-        warmup, iterations, "ELL-Basic"
-    ));
+    printf(
+        "\nConverting COO -> ELL...\n");
 
-    printf("Benchmarking Kernel 2: ELL-Optimized (shared memory)...\n");
-    results.push_back(timeKernel(
-        ellSpMV_Optimized, coo.m, coo.nnz, ell.max_row_len,
-        ell.d_col_idx, ell.d_values, d_x, d_y,
-        warmup, iterations, "ELL-Optimized"
-    ));
+    ELLMatrix ell =
+        cooToELL(coo);
 
-    // Print results
-    printf("\n═══════════════════════════════════════════════════════════\n");
-    printf("Benchmark Results Summary\n");
-    printf("═══════════════════════════════════════════════════════════\n\n");
+    printf(
+        "Max row length: %d\n",
+        ell.max_row_len);
 
-    for (const auto &stat : results) {
-        printf("%-25s: %8.4f ms | %10.2f GFLOP/s\n", stat.name, stat.avg_time_ms, stat.gflops);
+    double memory_ell=
+        (long long)
+        coo.m*
+        ell.max_row_len*
+        (sizeof(int)+sizeof(FloatType))
+        /1024.0;
+
+    printf(
+        "ELL Memory: %.2f KB\n",
+        memory_ell);
+
+
+    ////////////////////////////////////////////
+    // Allocate vectors
+    ////////////////////////////////////////////
+
+    FloatType* d_x;
+    FloatType* d_y;
+
+    CUDA_CHECK(
+        cudaMalloc(
+            &d_x,
+            coo.n*sizeof(FloatType)));
+
+    CUDA_CHECK(
+        cudaMalloc(
+            &d_y,
+            coo.m*sizeof(FloatType)));
+
+    ////////////////////////////////////////////
+    // Input vector
+    ////////////////////////////////////////////
+
+    printf(
+        "\nGenerating vector...\n");
+
+    generateRandomVector(
+        d_x,
+        coo.n,
+        42);
+
+    ////////////////////////////////////////////
+    // Benchmark
+    ////////////////////////////////////////////
+
+    std::vector<KernelStats>
+        results;
+
+    printf(
+        "\nBenchmarking Basic...\n");
+
+    results.push_back(
+        timeKernel(
+            ellSpMV_Basic,
+            coo.m,
+            coo.nnz,
+            ell.max_row_len,
+            ell.d_col_idx,
+            ell.d_values,
+            d_x,
+            d_y,
+            warmup,
+            iterations,
+            "ELL-Basic"
+        )
+    );
+
+
+
+    printf(
+        "Benchmarking Shared...\n");
+
+    results.push_back(
+        timeKernel(
+            ellSpMV_Shmem,
+            coo.m,
+            coo.nnz,
+            ell.max_row_len,
+            ell.d_col_idx,
+            ell.d_values,
+            d_x,
+            d_y,
+            warmup,
+            iterations,
+            "ELL-Shared"
+        )
+    );
+
+
+    ////////////////////////////////////////////
+    // Results
+    ////////////////////////////////////////////
+
+    printf("\n");
+    printf("====================================================\n");
+    printf("Results\n");
+    printf("====================================================\n\n");
+
+    for(auto& r:results)
+    {
+        printf(
+            "%-20s : %8.4f ms | %10.2f GFLOP/s\n",
+            r.name,
+            r.avg_time_ms,
+            r.gflops);
     }
 
-    // Find best kernel
-    int best_idx = 0;
-    double best_gflops = results[0].gflops;
-    for (int i = 1; i < (int)results.size(); i++) {
-        if (results[i].gflops > best_gflops) {
-            best_gflops = results[i].gflops;
-            best_idx = i;
+
+    ////////////////////////////////////////////
+    // Find best
+    ////////////////////////////////////////////
+
+    int best=0;
+
+    for(int i=1;
+        i<results.size();
+        i++)
+    {
+        if(results[i].gflops>
+           results[best].gflops)
+        {
+            best=i;
         }
     }
 
-    printf("\n✓ Best performing kernel: %s (%.2f GFLOP/s)\n\n", results[best_idx].name, best_gflops);
+    printf(
+        "\nBest kernel: %s (%.2f GFLOP/s)\n",
+        results[best].name,
+        results[best].gflops
+    );
 
+
+    ////////////////////////////////////////////
     // Cleanup
-    CUDA_CHECK(cudaFree(d_x));
-    CUDA_CHECK(cudaFree(d_y));
+    ////////////////////////////////////////////
+
+    CUDA_CHECK(
+        cudaFree(d_x));
+
+    CUDA_CHECK(
+        cudaFree(d_y));
+
     freeELLMatrix(ell);
 
-    printf("✓ ELL benchmark completed successfully!\n\n");
+    printf(
+        "\nBenchmark completed.\n\n");
+
     return 0;
 }

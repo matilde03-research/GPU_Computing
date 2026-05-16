@@ -1,0 +1,212 @@
+ ** On entry to cusparseCreateCsr() parameter number 5 (csrRowOffsets) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV_bufferSize() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+
+ ** On entry to cusparseSpMV() parameter number 4 (matA) had an illegal value: NULL pointer
+

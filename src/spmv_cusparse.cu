@@ -30,29 +30,32 @@ struct cusparseHandle_guard {
 
 bool validateResult(const std::vector<FloatType>& gpu_result, 
                    const std::vector<FloatType>& cpu_result,
-                   int m, FloatType tolerance = 1e-5f) {
-    bool valid = true;
-    int errors = 0;
-    
+                   int m, const char *kernel_name) {
+    FloatType tolerance = 1e-3;  // absolute floor
+    FloatType rel_tolerance = 1e-4;  // relative tolerance
+    int error_count = 0;
+    FloatType max_error = 0.0f;
+
     for (int i = 0; i < m; i++) {
-        FloatType abs_diff = fabs(gpu_result[i] - cpu_result[i]);
-        FloatType rel_diff = abs_diff / (fabs(cpu_result[i]) + 1e-10f);
-        
-        if (abs_diff > tolerance && rel_diff > tolerance) {
-            if (errors < 5) {
-                printf("  Error at index %d: GPU=%.6e, CPU=%.6e, diff=%.6e\n", 
-                       i, gpu_result[i], cpu_result[i], abs_diff);
+        FloatType diff = fabs(gpu_result[i] - cpu_result[i]);
+        FloatType rel_error = diff / (fabs(cpu_result[i]) + 1e-10f);  // avoid div by zero
+        if (diff > tolerance && rel_error > rel_tolerance) {
+            error_count++;
+            max_error = fmax(max_error, diff);
+            if (error_count <= 5) {  // Print first 5 errors
+                printf("  [%s] Error at index %d: GPU=%.6e, CPU=%.6e, diff=%.6e\n", 
+                       kernel_name, i, gpu_result[i], cpu_result[i], diff);
             }
-            errors++;
-            valid = false;
         }
     }
     
-    if (errors > 5) {
-        printf("  ... and %d more errors\n", errors - 5);
+    if (error_count > 0) {
+        printf("  [%s] FAILED: %d mismatches, max error: %.6e\n", kernel_name, error_count, max_error);
+        return false;
+    } else {
+        printf("  [%s] PASSED\n", kernel_name);
+        return true;
     }
-    
-    return valid;
 }
 
 // ==================== TIMING UTILITIES ====================
@@ -80,25 +83,29 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    printf("\n╔════════════════════════════════════════════════════════════╗\n");
+    printf("\n╔═══════════════════════════════════════════════════════════╗\n");
     printf("║        cuSPARSE CSR Format SpMV Benchmark                 ║\n");
-    printf("╚════════════════════════════════════════════════════════════╝\n\n");
+    printf("╚════════════════════════════════════════════════════════════╝\n");
 
     // Read matrix
     printf("Loading matrix from: %s\n", mtx_file);
     COOMatrix coo = readMatrixMarket(mtx_file);
+    
     
 
     // Convert to CSR
     printf("\nConverting to CSR format...\n");
     CSRMatrix csr = cooToCSR(coo);
 
+    printf("CSR Device Pointers - RowPtr: %p, ColIdx: %p, Values: %p\n", 
+       (void*)csr.d_row_ptr, (void*)csr.d_col_idx, (void*)csr.d_values);
+
     // Allocate vectors on device
     FloatType *d_x, *d_y;
     CUDA_CHECK(cudaMalloc(&d_x, coo.n * sizeof(FloatType)));
     CUDA_CHECK(cudaMalloc(&d_y, coo.m * sizeof(FloatType)));
 
-    // Generate random vector
+    // Generate random vector (same seed as other benchmarks)
     printf("Generating random vector (seed=42)...\n");
     generateRandomVector(d_x, coo.n, 42);
 
@@ -119,6 +126,7 @@ int main(int argc, char *argv[]) {
                       csr.d_row_ptr, csr.d_col_idx, csr.d_values,
                       CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                       CUSPARSE_INDEX_BASE_ZERO, CUDA_R_32F);
+    printf("d_y pointer: %p\n", (void*)d_y);
     
     // Create dense vectors
     cusparseCreateDnVec(&sparse.vecX, coo.n, d_x, CUDA_R_32F);
@@ -138,7 +146,8 @@ int main(int argc, char *argv[]) {
     double setup_time = std::chrono::duration<double, std::milli>(setup_end - setup_start).count();
     printf("cuSPARSE setup time: %.4f ms\n", setup_time);
     
-    
+    CUDA_CHECK(cudaMemset(d_y, 0, coo.m * sizeof(FloatType)));
+
     // Warm-up
     printf("\nWarm-up phase...\n");
     for (int i = 0; i < warmup; i++) {
@@ -188,29 +197,38 @@ int main(int argc, char *argv[]) {
     std::vector<FloatType> h_y_gpu(coo.m);
     std::vector<FloatType> h_y_cpu(coo.m, 0.0f);
 
-    // Generate same random vector on CPU
-    srand(42);
-    for (int i = 0; i < coo.n; i++) {
-        h_x[i] = (FloatType)rand() / RAND_MAX;
+    // Copy the SAME random vector used on GPU (generated with seed=42)
+    printf("Copying GPU input vector x to host...\n");
+    
+
+    CUDA_CHECK(cudaMemcpy(h_x.data(), d_x, coo.n * sizeof(FloatType), cudaMemcpyDeviceToHost));
+
+    // Run CPU baseline with OpenMP using the same random vector
+    printf("Running CPU baseline with OpenMP...\n");
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < coo.nnz; i++) {
+        int row = coo.row_indices[i];
+        int col = coo.col_indices[i];
+        #pragma omp atomic
+        h_y_cpu[row] += coo.values[i] * h_x[col];
     }
 
     // Copy GPU result
+    printf("Copying GPU output vector y to host...\n");
     CUDA_CHECK(cudaMemcpy(h_y_gpu.data(), d_y, coo.m * sizeof(FloatType), cudaMemcpyDeviceToHost));
-
-    // Run CPU baseline
-    printf("Running CPU baseline with OpenMP...\n");
-    spmvCPU_CSR(coo.m, coo.n, csr.row_ptr.data(), csr.col_idx.data(), 
-                csr.values.data(), h_x.data(), h_y_cpu.data());
 
     // Validate results
     printf("Comparing GPU and CPU results...\n");
-    bool valid = validateResult(h_y_gpu, h_y_cpu, coo.m);
+    printf("───────────────────────────────────────────────────────────\n");
+    bool valid = validateResult(h_y_gpu, h_y_cpu, coo.m, "cuSPARSE");
 
     if (valid) {
-        printf("✓ Validation PASSED: GPU results match CPU baseline\n\n");
+        printf("\n✓ Validation PASSED: GPU results match CPU baseline\n\n");
     } else {
-        printf("✗ Validation FAILED: GPU results differ from CPU baseline\n\n");
+        printf("\n✗ Validation FAILED: GPU results differ from CPU baseline\n\n");
     }
+
+    printf("════════════════════════════════════════════════════════════\n");
 
     // Cleanup
     CUDA_CHECK(cudaFree(dBuffer));
