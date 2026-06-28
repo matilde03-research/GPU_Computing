@@ -1,0 +1,53 @@
+Loading OpenMPI/4.1.5-GCC-12.3.0
+  Loading requirement: GCCcore/12.3.0 zlib/1.2.13-GCCcore-12.3.0
+    binutils/2.40-GCCcore-12.3.0 GCC/12.3.0 numactl/2.0.16-GCCcore-12.3.0
+    XZ/5.4.2-GCCcore-12.3.0 libxml2/2.11.4-GCCcore-12.3.0
+    libpciaccess/0.17-GCCcore-12.3.0 hwloc/2.9.1-GCCcore-12.3.0 OpenSSL/1.1
+    libevent/2.1.12-GCCcore-12.3.0 UCX/1.14.1-GCCcore-12.3.0
+    libfabric/1.18.0-GCCcore-12.3.0 PMIx/4.2.4-GCCcore-12.3.0
+    UCC/1.2.0-GCCcore-12.3.0
+gcc (GCC) 12.3.0
+Copyright (C) 2022 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+gcc (GCC) 12.3.0
+Copyright (C) 2022 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+# Reading Matrix Market file: ../data/FullChip.mtx
+# Matrix: 2987012 x 2987012, nnz = 26621990  | P = 1, warmup = 4, iters = 100
+# CUDA-aware MPI: yes
+
+==================  CSR-VECTOR KERNEL  ==================
+  COO->CSR conversion (max over ranks) :   864.7949 ms
+  SpMV time per iteration (wall)       :    10.0462 ms
+      - computation (max over ranks)   :    10.0452 ms
+      - communication (max over ranks) :     0.0009 ms
+  FLOPs per SpMV (2 * nnz)             :  5.324e+07
+  Performance                          :      5.300 GFLOP/s
+  Single-GPU baseline (T1)             :     9.6499 ms
+  Speedup  (T1 / T_P)                  :      0.961
+  Efficiency (speedup / P)             :      0.961
+  Validation vs OpenMP CPU             : L2rel=4.069e-08  maxabs=7.324e-04  [PASS]
+  -- Load balance  nnz / rank          : min=26621990  avg=26621990.0  max=26621990
+  -- Comm volume   ghosts(float)/rank  : min=0  avg=0.0  max=0  (max=0.00 MB)
+  -- Memory footprint / rank           : min=248.69  avg=248.69  max=248.69 MB
+
+==================  cuSPARSE KERNEL  ==================
+  COO->CSR conversion (max over ranks) :   864.7949 ms
+  SpMV time per iteration (wall)       :     0.3663 ms
+      - computation (max over ranks)   :     0.3655 ms
+      - communication (max over ranks) :     0.0008 ms
+  FLOPs per SpMV (2 * nnz)             :  5.324e+07
+  Performance                          :    145.338 GFLOP/s
+  Single-GPU baseline (T1)             :     0.3604 ms
+  Speedup  (T1 / T_P)                  :      0.984
+  Efficiency (speedup / P)             :      0.984
+  Validation vs OpenMP CPU             : L2rel=8.140e-08  maxabs=1.953e-03  [PASS]
+  -- Load balance  nnz / rank          : min=26621990  avg=26621990.0  max=26621990
+  -- Comm volume   ghosts(float)/rank  : min=0  avg=0.0  max=0  (max=0.00 MB)
+  -- Memory footprint / rank           : min=248.74  avg=248.74  max=248.74 MB
+
+# Done.

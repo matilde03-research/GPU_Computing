@@ -1,0 +1,35 @@
+# Reading Matrix Market file: ../data/rajat31.mtx
+# Matrix: 4690002 x 4690002, nnz = 20316253  | P = 1, warmup = 4, iters = 100
+# CUDA-aware MPI: yes
+
+==================  CSR-VECTOR KERNEL  ==================
+  COO->CSR conversion (max over ranks) :   253.4632 ms
+  SpMV time per iteration (wall)       :     3.0897 ms
+      - computation (max over ranks)   :     3.0888 ms
+      - communication (max over ranks) :     0.0008 ms
+  FLOPs per SpMV (2 * nnz)             :  4.063e+07
+  Performance                          :     13.151 GFLOP/s
+  Single-GPU baseline (T1)             :     2.4666 ms
+  Speedup  (T1 / T_P)                  :      0.798
+  Efficiency (speedup / P)             :      0.798
+  Validation vs OpenMP CPU             : L2rel=5.785e-08  maxabs=2.441e-04  [PASS]
+  -- Load balance  nnz / rank          : min=20316253  avg=20316253.0  max=20316253
+  -- Comm volume   ghosts(float)/rank  : min=0  avg=0.0  max=0  (max=0.00 MB)
+  -- Memory footprint / rank           : min=226.56  avg=226.56  max=226.56 MB
+
+==================  cuSPARSE KERNEL  ==================
+  COO->CSR conversion (max over ranks) :   253.4632 ms
+  SpMV time per iteration (wall)       :     0.3262 ms
+      - computation (max over ranks)   :     0.3252 ms
+      - communication (max over ranks) :     0.0008 ms
+  FLOPs per SpMV (2 * nnz)             :  4.063e+07
+  Performance                          :    124.580 GFLOP/s
+  Single-GPU baseline (T1)             :     0.3192 ms
+  Speedup  (T1 / T_P)                  :      0.979
+  Efficiency (speedup / P)             :      0.979
+  Validation vs OpenMP CPU             : L2rel=5.907e-08  maxabs=2.136e-04  [PASS]
+  -- Load balance  nnz / rank          : min=20316253  avg=20316253.0  max=20316253
+  -- Comm volume   ghosts(float)/rank  : min=0  avg=0.0  max=0  (max=0.00 MB)
+  -- Memory footprint / rank           : min=226.60  avg=226.60  max=226.60 MB
+
+# Done.

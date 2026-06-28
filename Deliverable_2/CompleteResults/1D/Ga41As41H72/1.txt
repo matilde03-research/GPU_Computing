@@ -1,0 +1,45 @@
+gcc (GCC) 12.3.0
+Copyright (C) 2022 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+gcc (GCC) 12.3.0
+Copyright (C) 2022 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+# Reading Matrix Market file: ../data/Ga41As41H72.mtx
+# Matrix: 268096 x 268096, nnz = 18488476  | P = 1, warmup = 4, iters = 100
+# CUDA-aware MPI: yes
+
+==================  CSR-VECTOR KERNEL  ==================
+  COO->CSR conversion (max over ranks) :   206.6131 ms
+  SpMV time per iteration (wall)       :     0.3215 ms
+      - computation (max over ranks)   :     0.3206 ms
+      - communication (max over ranks) :     0.0008 ms
+  FLOPs per SpMV (2 * nnz)             :  3.698e+07
+  Performance                          :    115.022 GFLOP/s
+  Single-GPU baseline (T1)             :     0.3143 ms
+  Speedup  (T1 / T_P)                  :      0.978
+  Efficiency (speedup / P)             :      0.978
+  Validation vs OpenMP CPU             : L2rel=2.880e-07  maxabs=3.967e-04  [PASS]
+  -- Load balance  nnz / rank          : min=18488476  avg=18488476.0  max=18488476
+  -- Comm volume   ghosts(float)/rank  : min=0  avg=0.0  max=0  (max=0.00 MB)
+  -- Memory footprint / rank           : min=145.15  avg=145.15  max=145.15 MB
+
+==================  cuSPARSE KERNEL  ==================
+  COO->CSR conversion (max over ranks) :   206.6131 ms
+  SpMV time per iteration (wall)       :     0.2178 ms
+      - computation (max over ranks)   :     0.2169 ms
+      - communication (max over ranks) :     0.0008 ms
+  FLOPs per SpMV (2 * nnz)             :  3.698e+07
+  Performance                          :    169.774 GFLOP/s
+  Single-GPU baseline (T1)             :     0.2118 ms
+  Speedup  (T1 / T_P)                  :      0.972
+  Efficiency (speedup / P)             :      0.972
+  Validation vs OpenMP CPU             : L2rel=2.866e-07  maxabs=3.662e-04  [PASS]
+  -- Load balance  nnz / rank          : min=18488476  avg=18488476.0  max=18488476
+  -- Comm volume   ghosts(float)/rank  : min=0  avg=0.0  max=0  (max=0.00 MB)
+  -- Memory footprint / rank           : min=145.18  avg=145.18  max=145.18 MB
+
+# Done.

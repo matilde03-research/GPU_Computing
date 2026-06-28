@@ -1,0 +1,35 @@
+# Generating 3D 7-point stencil: 102 x 102 x 102 (N=1061208)
+# Matrix: 1061208 x 1061208, nnz = 7366032  | P = 4, warmup = 4, iters = 100
+# CUDA-aware MPI: yes
+
+==================  CSR-VECTOR KERNEL  ==================
+  COO->CSR conversion (max over ranks) :    28.1672 ms
+  SpMV time per iteration (wall)       :    13.7945 ms
+      - computation (max over ranks)   :     0.2218 ms
+      - communication (max over ranks) :    13.5760 ms
+  FLOPs per SpMV (2 * nnz)             :  1.473e+07
+  Performance                          :      1.068 GFLOP/s
+  Single-GPU baseline (T1)             :     0.7783 ms
+  Speedup  (T1 / T_P)                  :      0.056
+  Efficiency (speedup / P)             :      0.014
+  Validation vs OpenMP CPU             : L2rel=7.608e-08  maxabs=1.907e-06  [PASS]
+  -- Load balance  nnz / rank          : min=1841508  avg=1841508.0  max=1841508
+  -- Comm volume   ghosts(float)/rank  : min=790704  avg=790704.0  max=790704  (max=3.02 MB)
+  -- Memory footprint / rank           : min=33.20  avg=33.20  max=33.20 MB
+
+==================  cuSPARSE KERNEL  ==================
+  COO->CSR conversion (max over ranks) :    28.1672 ms
+  SpMV time per iteration (wall)       :    10.8993 ms
+      - computation (max over ranks)   :     0.0602 ms
+      - communication (max over ranks) :    10.8425 ms
+  FLOPs per SpMV (2 * nnz)             :  1.473e+07
+  Performance                          :      1.352 GFLOP/s
+  Single-GPU baseline (T1)             :     0.1100 ms
+  Speedup  (T1 / T_P)                  :      0.010
+  Efficiency (speedup / P)             :      0.003
+  Validation vs OpenMP CPU             : L2rel=6.996e-08  maxabs=1.907e-06  [PASS]
+  -- Load balance  nnz / rank          : min=1841508  avg=1841508.0  max=1841508
+  -- Comm volume   ghosts(float)/rank  : min=790704  avg=790704.0  max=790704  (max=3.02 MB)
+  -- Memory footprint / rank           : min=33.20  avg=33.20  max=33.20 MB
+
+# Done.

@@ -1,0 +1,35 @@
+# Reading Matrix Market file: ../data/bone010/bone010.mtx
+# Matrix: 986703 x 986703, nnz = 71666325  | P = 2, warmup = 4, iters = 100
+# CUDA-aware MPI: yes
+
+==================  CSR-VECTOR KERNEL  ==================
+  COO->CSR conversion (max over ranks) : 10585.6251 ms
+  SpMV time per iteration (wall)       :     3.9065 ms
+      - computation (max over ranks)   :     0.7149 ms
+      - communication (max over ranks) :     3.1995 ms
+  FLOPs per SpMV (2 * nnz)             :  1.433e+08
+  Performance                          :     36.691 GFLOP/s
+  Single-GPU baseline (T1)             :     1.3483 ms
+  Speedup  (T1 / T_P)                  :      0.345
+  Efficiency (speedup / P)             :      0.173
+  Validation vs OpenMP CPU             : L2rel=1.481e-07  maxabs=1.562e-02  [PASS]
+  -- Load balance  nnz / rank          : min=35832975  avg=35833162.5  max=35833350
+  -- Comm volume   ghosts(float)/rank  : min=493351  avg=493351.5  max=493352  (max=1.88 MB)
+  -- Memory footprint / rank           : min=290.32  avg=290.32  max=290.32 MB
+
+==================  cuSPARSE KERNEL  ==================
+  COO->CSR conversion (max over ranks) : 10585.6251 ms
+  SpMV time per iteration (wall)       :     3.4318 ms
+      - computation (max over ranks)   :     0.4256 ms
+      - communication (max over ranks) :     3.0618 ms
+  FLOPs per SpMV (2 * nnz)             :  1.433e+08
+  Performance                          :     41.765 GFLOP/s
+  Single-GPU baseline (T1)             :     0.6904 ms
+  Speedup  (T1 / T_P)                  :      0.201
+  Efficiency (speedup / P)             :      0.101
+  Validation vs OpenMP CPU             : L2rel=1.461e-07  maxabs=1.562e-02  [PASS]
+  -- Load balance  nnz / rank          : min=35832975  avg=35833162.5  max=35833350
+  -- Comm volume   ghosts(float)/rank  : min=493351  avg=493351.5  max=493352  (max=1.88 MB)
+  -- Memory footprint / rank           : min=290.39  avg=290.39  max=290.39 MB
+
+# Done.
