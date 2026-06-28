@@ -2,6 +2,7 @@
 
 ---
 
+## Important! Instructions and README.md file for Deliverable 2 are in Deliverable_2 folder
 ## Supported Formats & Kernels
 
 ### **1. COO Format**
