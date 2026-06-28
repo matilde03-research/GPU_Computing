@@ -12,7 +12,6 @@ Deliverable_2/
 ├── src/
 │    ├── mtx_parser.cu
 │    ├── spmv.cu      
-├── ASIC_680ks.mtx   //File to ignore, just for fast checking
 ├── Makefile
 ├── README.md
 └── batch_script.sh //To run the programs in a job in the assigned environment
