@@ -3,7 +3,8 @@
 ```
 Deliverable_2/
 ├── bin/ --> will be created and populated after *make BINUTILS=/bin*
-├── CompleteResults/ --> files are not listed here because they're a lot but it's a folder with detailed output
+├── CompleteResults/
+|     ├── 1D/ --> files are not listed here because they're a lot but it's a folder with detailed output
 │                        for the 10 Suite Sparse matrices (the outputs for each matrix are 3, one per GPUs number
 │                        (1,2,4) and then there are also the results for 4 randomly generated matrices (2 from R-MAT
 │                        and 2 from stencil)
