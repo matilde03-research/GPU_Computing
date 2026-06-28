@@ -1,30 +1,5 @@
 # Deliverable_2
 
----
-
-## Important! Instructions and README.md file for Deliverable 2 are in Deliverable_2 folder
-## Supported Formats & Kernels
-
-### **1. COO Format**
-
-#### COO-Standard
-#### COO-SortedSegmentedReduction
-
-### **2. CSR Format**
-
-#### CSR-Vector
-#### CSR-Flat
-#### CSR-Line-Enhance
-
-### **3. ELL Format**
-#### ELL-Basic
-#### ELL-Coalesced
-
-### **Reference**
-
-#### cuSPARSE
-
----
 ```
 Deliverable_2/
 ├── bin/ --> will be created and populated after *make BINUTILS=/bin*
