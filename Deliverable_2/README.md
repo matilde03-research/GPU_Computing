@@ -1,4 +1,4 @@
-# GPU_Computing
+# Deliverable_2
 
 ---
 
