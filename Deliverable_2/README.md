@@ -52,10 +52,10 @@ The lines to check/change are:
 mpirun -np 2 ./bin/spmv ../data/ASIC_680ks.mtx 4 100 2   --> explained later
 ```
 
-the first number is the number of processes, then there's the executable program, then the warmup cycles, the number of iterations and again the number of gpus you want to use
+Explanation of the *mpirun* line above: the first number is the number of processes, then there's the executable program, then the path to the matrix you want to use, then the warmup cycles, the number of iterations and again the number of gpus you want to use.
 You can also replace the Suite Sparse matrix path with a randomly generated matrix, instead of the path you can insert *random_rmat* or *random_stencil* according to the type of matrix you want to experiment with
 
-After that you run the batch_script.sh you'll have 2 output file to inspect in the "output" directory that will be created
+After that you run the batch_script.sh and you'll have 2 output file to inspect in the "output" directory that will be created
 
-The Suite Sparse matrices are the one already downloaded for the first assignment, to download them you can use the download.sh file present one level outside this folder. It will download the matrices in a directory called "data". The provided line of code for the run in the batch_script.sh should be able to detect the data folder even if it's "one folder above".
+The Suite Sparse matrices are the ones already downloaded for the first assignment, to download them you can use the download.sh file present one level outside this folder (main folder of this repository). It will download the matrices in a directory called "data". The provided line of code for the run in the batch_script.sh should be able to detect the data folder even if it's "one folder above".
 
