@@ -18,30 +18,16 @@ typedef struct {
 
 /*
  * Read a Matrix Market coordinate file into 'A' (host memory).
- * Supports field = real | integer | pattern (complex: imaginary part dropped).
- * Supports symmetry = general | symmetric | skew-symmetric (expanded to full).
- * Returns 0 on success, non-zero on failure.  Free with coo_free().
  */
 int mm_read_coo(const char *path, COOMatrix *A);
 
-/*
- * Generate a square R-MAT matrix.
- *   scale       -> N = 2^scale rows and columns
- *   edge_factor -> ~edge_factor nonzeros per row (nnz ~= edge_factor * N)
- *   seed        -> RNG seed for reproducibility
- * Duplicate (i,j) edges are kept (they simply accumulate during SpMV, exactly
- * as they do in the CPU reference, so correctness is unaffected).
- * Returns 0 on success.  Free with coo_free().
- */
+//Generate a square R-MAT matrix.
+
 int rmat_generate(int scale, int edge_factor, unsigned int seed, COOMatrix *A);
 
 /*
  * Generate a structured finite-difference Laplacian on a regular grid:
- * 7-point in 3D, or 5-point in 2D when nz==1. The grid is nx x ny x nz, so
- * N = nx*ny*nz rows. Diagonal = 2*ndim, each existing face neighbor = -1.
- * Unlike R-MAT, this has a *uniform* row degree (good load balance) and
- * *locality* (bounded bandwidth), which makes it well suited to weak-scaling
- * studies. Returns 0 on success; free with coo_free().
+ * 7-point in 3D, or 5-point in 2D when nz==1. 
  */
 int stencil_generate(int nx, int ny, int nz, COOMatrix *A);
 
