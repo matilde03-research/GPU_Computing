@@ -1,10 +1,7 @@
 /*
- 
- *
  * Launch:
  *   mpirun -np <P> ./bin/spmv <matrix.mtx | random> <warmup> <iters> <P>
  *   with P in {1, 2, 4}; one MPI rank is bound to one GPU.
-
  * =============================================================================
  */
 
@@ -47,7 +44,10 @@
         }                                                                       \
     } while (0)
 
-
+/* Check a kernel *launch* error. cudaDeviceSynchronize() does NOT report a
+ * launch failure (e.g. a binary built for the wrong -arch); cudaGetLastError()
+ * right after the launch does. Without this, a failed launch silently produces
+ * zeros instead of aborting. */
 #define CUDA_CHECK_KERNEL() CUDA_CHECK(cudaGetLastError())
 
 #define CUSPARSE_CHECK(call)                                                    \
@@ -138,6 +138,9 @@ static long count_cyclic(long total, int rank, int P)
 
 /*
  * Build a CSR representation from COO whose rows are addressed cyclically.
+ * The produced row pointer is indexed by LOCAL row (global_row / P); column
+ * indices stay GLOBAL.  Passing rank=0, P=1, n_local=n_rows yields a plain
+ * full-matrix CSR (used for the rank-0 reference and single-GPU baseline).
  */
 static void build_cyclic_csr(const int *grow, const int *gcol, const float *gval,
                              long nnz, int n_local, int /*rank*/, int P,
@@ -311,7 +314,19 @@ static void ghost_exchange(GhostPlan *g, float *d_x, float *d_xloc)
 /* Per-phase timing accumulators (seconds). Used only in profiling mode. */
 typedef struct { double pack, owned, wait, scatter, ghost; } PhaseT;
 
-
+/*
+ * CSR-vector SpMV with communication / computation overlap (column split):
+ *   pack owned x -> post non-blocking halo (Isend/Irecv)
+ *   -> compute OWNED-column SpMV while the halo is in flight   (y  = A_owned x)
+ *   -> wait -> scatter ghosts
+ *   -> compute GHOST-column SpMV                               (y += A_ghost x)
+ * Returns the EXPOSED communication time (the MPI_Waitall duration).
+ *
+ * If prof != NULL the function inserts a stream sync after each phase and
+ * records its duration -- this DISABLES the overlap (phases run serially) and
+ * is meant purely for diagnosing where time goes. With prof == NULL the
+ * owned-column kernel genuinely overlaps the transfer.
+ */
 static double spmv_csr_overlap(GhostPlan *g, int n_local,
         const int *d_o_rp, const int *d_o_ci, const float *d_o_v,
         const int *d_g_rp, const int *d_g_ci, const float *d_g_v,
@@ -321,7 +336,7 @@ static double spmv_csr_overlap(GhostPlan *g, int n_local,
 {
     double t;
 
-    /*  pack owned x values other ranks need */
+    /* 1. pack owned x values other ranks need */
     t = MPI_Wtime();
     if (g->total_send > 0) {
         int gr = (g->total_send + 255) / 256;
@@ -341,7 +356,7 @@ static double spmv_csr_overlap(GhostPlan *g, int n_local,
     float *sbuf = g->h_send_buf, *rbuf = g->h_recv_buf;
 #endif
 
-    /* post non-blocking point-to-point halo */
+    /* 2. post non-blocking point-to-point halo */
     int nreq = 0;
     for (int p = 0; p < g->P; ++p)
         if (g->recv_counts[p] > 0)
@@ -352,7 +367,7 @@ static double spmv_csr_overlap(GhostPlan *g, int n_local,
             MPI_Isend(sbuf + g->send_displs[p], g->send_counts[p], MPI_FLOAT,
                       p, 0, MPI_COMM_WORLD, &reqs[nreq++]);
 
-    /*  owned-column SpMV -- overlaps the transfer (unless profiling) */
+    /* 3. owned-column SpMV -- overlaps the transfer (unless profiling) */
     t = MPI_Wtime();
     if (n_local > 0) {
         int gr = (n_local * 32 + blk - 1) / blk;
@@ -362,7 +377,7 @@ static double spmv_csr_overlap(GhostPlan *g, int n_local,
     }
     if (prof) { CUDA_CHECK(cudaStreamSynchronize(comp_s)); prof->owned += MPI_Wtime() - t; }
 
-    /*  wait for the halo (exposed communication) */
+    /* 4. wait for the halo (exposed communication) */
     t = MPI_Wtime();
     MPI_Waitall(nreq, reqs, MPI_STATUSES_IGNORE);
     double exposed = MPI_Wtime() - t;
@@ -374,7 +389,7 @@ static double spmv_csr_overlap(GhostPlan *g, int n_local,
                               sizeof(float) * g->total_recv, cudaMemcpyHostToDevice));
 #endif
 
-    /*  scatter ghosts into the global x */
+    /* 5. scatter ghosts into the global x */
     t = MPI_Wtime();
     if (g->total_recv > 0) {
         int gr = (g->total_recv + 255) / 256;
@@ -385,7 +400,7 @@ static double spmv_csr_overlap(GhostPlan *g, int n_local,
     CUDA_CHECK(cudaStreamSynchronize(comm_s));   /* ghosts present before ghost pass */
     if (prof) prof->scatter += MPI_Wtime() - t;
 
-    /* ghost-column SpMV -- accumulates */
+    /* 6. ghost-column SpMV -- accumulates */
     t = MPI_Wtime();
     if (n_local > 0) {
         int gr = (n_local * 32 + blk - 1) / blk;
@@ -956,11 +971,6 @@ int main(int argc, char **argv)
             /* report the actual CSR kernel time (owned + ghost) as "computation" */
             compute_ms = (prof.owned + prof.ghost) / pit * 1000.0;
         }
-
-        /* communication = everything that is not strictly computation, so that
-         * total == communication + computation exactly */
-        comm_ms = total_ms - compute_ms;
-        if (comm_ms < 0.0) comm_ms = 0.0;
 
         /* single-GPU baseline (rank 0) */
         double T1_ms = 0.0;
